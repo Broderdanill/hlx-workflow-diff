@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BMC HLX Workflow Diff</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>BMC HLX Workflow Diff</h1>
+      <p>Jämför workflow-metadata mellan två Helix/AR System-miljöer. Anslutningar och credentials ligger endast i serverns konfiguration.</p>
+    </header>
+
+    {% if error %}<section class="error">{{ error }}</section>{% endif %}
+
+    <section class="card">
+      <form method="post" action="/compare">
+        <div class="compare-grid">
+          <label>Källmiljö
+            <select name="source_env" required>
+              <option value="">Välj källmiljö</option>
+              {% for env in envs %}
+                <option value="{{ env.name }}" {% if form and form.source_env == env.name %}selected{% endif %}>{{ env.name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <div class="arrow" aria-hidden="true">→</div>
+          <label>Målmiljö
+            <select name="target_env" required>
+              <option value="">Välj målmiljö</option>
+              {% for env in envs %}
+                <option value="{{ env.name }}" {% if form and form.target_env == env.name %}selected{% endif %}>{{ env.name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
+
+        <p class="hint server-config">Miljöerna hämtas från <code>HELIX_CONFIG</code> eller <code>HELIX_ENVIRONMENTS_JSON</code>. URL, användarnamn och lösenord skickas inte till browsern.</p>
+
+        <div class="grid filters">
+          <label>Objekt
+            <select name="object_type">
+              <option value="all" {% if not form or form.object_type == 'all' %}selected{% endif %}>Alla</option>
+              {% for key, t in types.items() %}
+                <option value="{{ key }}" {% if form and form.object_type == key %}selected{% endif %}>{{ t.label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Prefix
+            <input name="prefix" placeholder="t.ex. CHG:" value="{{ form.prefix if form else '' }}">
+          </label>
+          <label>Söktext
+            <input name="contains" placeholder="namn eller associerad form" value="{{ form.contains if form else '' }}">
+          </label>
+          <label>Ignorera fält
+            <input name="ignore" value="{{ form.ignore if form else 'timestamp' }}">
+          </label>
+        </div>
+
+        <div class="actions"><button type="submit" {% if envs|length < 2 %}disabled{% endif %}>Jämför valda miljöer</button></div>
+      </form>
+    </section>
+
+    {% if result_groups %}
+      <section class="results-toolbar card slim">
+        <strong>Resultat: {{ form.source_env }} → {{ form.target_env }}</strong>
+        <span>Börja med summeringen nedan. Expandera bara kategorier med avvikelser när du vill se exakt vilka fält som skiljer.</span>
+      </section>
+
+      <section class="category-overview" aria-label="Summerat jämförelseresultat">
+        {% for group in result_groups %}
+          {% set result = group.result %}
+          {% set issue_count = result.summary.different + result.summary.missing %}
+          <a class="overview-card {{ 'all-ok' if issue_count == 0 else 'has-issues' }}" href="#category-{{ group.type.key }}">
+            <div class="overview-top">
+              <span class="overview-title">{{ group.type.label }}</span>
+              {% if issue_count == 0 %}
+                <span class="health ok">Alla samma</span>
+              {% else %}
+                <span class="health warn">{{ issue_count }} avvikelse{{ 'r' if issue_count != 1 else '' }}</span>
+              {% endif %}
+            </div>
+            <div class="overview-numbers">
+              <span>{{ result.summary.total }} totalt</span>
+              <span>{{ result.summary.equal }} lika</span>
+              <span>{{ result.summary.different }} olika</span>
+              <span>{{ result.summary.missing }} saknas</span>
+            </div>
+          </a>
+        {% endfor %}
+      </section>
+
+      {% for group in result_groups %}
+        {% set result = group.result %}
+        {% set equal_rows = result.rows | selectattr('status', 'equalto', 'equal') | list %}
+        {% set different_rows = result.rows | selectattr('status', 'equalto', 'different') | list %}
+        {% set missing_rows = result.rows | selectattr('status', 'equalto', 'missing') | list %}
+        <details class="type-panel" id="category-{{ group.type.key }}" data-type-panel>
+          {% set issue_count = result.summary.different + result.summary.missing %}
+          <summary class="type-summary">
+            <span class="type-title">{{ group.type.label }}</span>
+            <span class="type-health {{ 'ok' if issue_count == 0 else 'warn' }}">
+              {% if issue_count == 0 %}
+                Alla objekt matchar
+              {% else %}
+                {{ issue_count }} avvikelse{{ 'r' if issue_count != 1 else '' }} hittades
+              {% endif %}
+            </span>
+            <span class="summary-badges">
+              <span class="badge total">{{ result.summary.total }} totalt</span>
+              <span class="badge ok">{{ result.summary.equal }} lika</span>
+              <span class="badge warn">{{ result.summary.different }} olika</span>
+              <span class="badge bad">{{ result.summary.missing }} saknas</span>
+            </span>
+          </summary>
+
+          <div class="type-content">
+            <div class="status-filter" role="group" aria-label="Filtrera resultatstatus">
+              <button type="button" class="filter-button active" data-status-filter="all">Alla</button>
+              <button type="button" class="filter-button" data-status-filter="different">Olika</button>
+              <button type="button" class="filter-button" data-status-filter="missing">Saknas</button>
+              <button type="button" class="filter-button" data-status-filter="equal">Lika</button>
+            </div>
+
+            {% for bucket in [
+              {'status': 'different', 'label': 'Olika / ändrade', 'rows': different_rows},
+              {'status': 'missing', 'label': 'Saknas i någon miljö', 'rows': missing_rows},
+              {'status': 'equal', 'label': 'Lika', 'rows': equal_rows}
+            ] %}
+              <details class="bucket {{ bucket.status }}" data-status-bucket="{{ bucket.status }}">
+                <summary>
+                  <span>{{ bucket.label }}</span>
+                  <span class="count">{{ bucket.rows | length }}</span>
+                </summary>
+
+                {% if bucket.rows %}
+                  <div class="table-wrap">
+                    <table>
+                      <thead><tr><th>Objekt</th><th>Status</th><th>Detaljer</th></tr></thead>
+                      <tbody>
+                      {% for row in bucket.rows %}
+                        <tr class="{{ row.status }}">
+                          <td class="object-name">{{ row.name }}</td>
+                          <td><span class="pill">{{ row.status_label }}</span></td>
+                          <td>
+                            {% if row.missing_envs %}<div>Saknas i: {{ row.missing_envs | join(', ') }}</div>{% endif %}
+                            {% if row.field_diffs %}
+                              <details class="object-diff">
+                                <summary>Visa fältdiff <span class="count">{{ row.field_diffs | length }}</span></summary>
+                                <div class="field-diff-list">
+                                  {% for diff in row.field_diffs %}
+                                    <details class="field-diff">
+                                      <summary>{{ diff.field }}</summary>
+                                      <div class="side-by-side">
+                                        <div class="value-panel">
+                                          <div class="value-title">{{ result.environments[0] }}</div>
+                                          <pre>{{ diff.left | string }}</pre>
+                                        </div>
+                                        <div class="value-panel">
+                                          <div class="value-title">{{ result.environments[1] }}</div>
+                                          <pre>{{ diff.right | string }}</pre>
+                                        </div>
+                                      </div>
+                                    </details>
+                                  {% endfor %}
+                                </div>
+                              </details>
+                            {% endif %}
+                          </td>
+                        </tr>
+                      {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                {% else %}
+                  <p class="empty">Inga objekt i denna grupp.</p>
+                {% endif %}
+              </details>
+            {% endfor %}
+          </div>
+        </details>
+      {% endfor %}
+    {% endif %}
+  </main>
+  <script>
+    document.querySelectorAll('[data-type-panel]').forEach((panel) => {
+      const buttons = panel.querySelectorAll('[data-status-filter]');
+      const buckets = panel.querySelectorAll('[data-status-bucket]');
+      buttons.forEach((button) => {
+        button.addEventListener('click', () => {
+          const status = button.dataset.statusFilter;
+          buttons.forEach((b) => b.classList.toggle('active', b === button));
+          buckets.forEach((bucket) => {
+            const show = status === 'all' || bucket.dataset.statusBucket === status;
+            bucket.hidden = !show;
+            if (show && status !== 'all') bucket.open = true;
+          });
+        });
+      });
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hlx-workflow-diff
+spec:
+  volumes:
+    - name: cache-volume
+      emptyDir:
+        medium: Memory
+        sizeLimit: 512Mi
+  containers:
+    - name: app
+      image: localhost/hlx-workflow-diff:latest
+      ports:
+        - containerPort: 8089
+          hostPort: 8089
+      env:
+        - name: HELIX_CONFIG
+          value: /opt/hlx-workflow-diff/config/hlx-diff.yaml
+        - name: CACHE_DIR
+          value: /tmp/cache
+        - name: LOG_LEVEL
+          value: INFO
+      volumeMounts:
+        - name: cache-volume
+          mountPath: /tmp/cache
