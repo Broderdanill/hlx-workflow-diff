@@ -1,13 +1,23 @@
 apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hlx-workflow-diff-cache-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
 kind: Pod
 metadata:
   name: hlx-workflow-diff
 spec:
   volumes:
     - name: cache-volume
-      emptyDir:
-        medium: Memory
-        sizeLimit: 512Mi
+      persistentVolumeClaim:
+        claimName: hlx-workflow-diff-cache-pvc
   containers:
     - name: app
       image: localhost/hlx-workflow-diff:latest
@@ -17,10 +27,40 @@ spec:
       env:
         - name: HELIX_CONFIG
           value: /opt/hlx-workflow-diff/config/hlx-diff.yaml
-        - name: CACHE_DIR
-          value: /tmp/cache
+        - name: HELIX_CACHE_DIR
+          value: /data/cache
+        # Synkar alla definierade miljöer när podden startar.
+        - name: HELIX_SYNC_ON_START
+          value: "true"
+        # Endast komplett/djup cache används. Vid pod-start görs full sync om cache saknas, annars incremental check.
+        # Efter första fulla synken görs en lätt timestamp-kontroll på intervall.
+        # Om metadata ändrats görs ny full sync för den objekttypen.
+        - name: HELIX_SYNC_INTERVAL_SECONDS
+          value: "900"
+        # balanced = Migrator-lik djupanalys utan äldre/ovanliga action-former.
+        # full = alla kända relaterade metadata-former. minimal = snabbare behörighet/fält/mapping.
+        - name: HELIX_DEEP_PROFILE
+          value: balanced
+        # Migrator-lik cache: första körningen bygger komplett djup snapshot.
+        # Inkrementell sync hämtar basmetadata för alla objekt men expanderar bara
+        # djup metadata för nya/ändrade objekt.
+        - name: HELIX_ENV_CONCURRENCY
+          value: "2"
+        - name: HELIX_OBJECT_CONCURRENCY
+          value: "2"
+        # Antal parallella relaterade metadata-former som hämtas per objekttyp/miljö.
+        - name: HELIX_RELATED_FETCH_CONCURRENCY
+          value: "3"
+        # Antal parallella q-batcher per relaterad metadata-form.
+        - name: HELIX_RELATED_BATCH_CONCURRENCY
+          value: "3"
+        # Antal parent-objekt per q-batch när djupmetadata hämtas.
+        - name: HELIX_RELATED_PARENT_BATCH_SIZE
+          value: "25"
+        - name: HELIX_HTTP_TIMEOUT
+          value: "300"
         - name: LOG_LEVEL
           value: INFO
       volumeMounts:
         - name: cache-volume
-          mountPath: /tmp/cache
+          mountPath: /data/cache

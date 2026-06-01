@@ -14,6 +14,7 @@
     </header>
 
     {% if error %}<section class="error">{{ error }}</section>{% endif %}
+    {% if message %}<section class="message">{{ message }}</section>{% endif %}
 
     <section class="card">
       <form method="post" action="/compare">
@@ -59,14 +60,92 @@
           </label>
         </div>
 
-        <div class="actions"><button type="submit" {% if envs|length < 2 %}disabled{% endif %}>Jämför valda miljöer</button></div>
+        <div class="deep-row options-row">
+          <span class="mode-pill">Komplett jämförelse</span>
+          <span class="hint">Verktyget använder alltid komplett/djup cache. Profil: <b>{{ deep_profile }}</b>, parallella metadatahämtningar: <b>{{ related_fetch_concurrency }}</b>.</span>
+        </div>
+
+        <div class="actions split-actions">
+          <button type="submit" {% if envs|length < 2 %}disabled{% endif %}>Jämför valda miljöer</button>
+          <button class="secondary" type="submit" formaction="/sync" formmethod="post" name="sync_mode" value="full" data-sync-mode="full" {% if envs|length < 2 %}disabled{% endif %}>Full synk</button>
+          <button class="secondary" type="submit" formaction="/sync" formmethod="post" name="sync_mode" value="incremental" data-sync-mode="incremental" {% if envs|length < 2 %}disabled{% endif %}>Kontrollera ändringar</button>
+        </div>
       </form>
+    </section>
+
+    <section class="card cache-card collapsed-status" id="sync-status-card">
+      {% set running_count = cache_status.environments | selectattr('status', 'equalto', 'syncing') | list | length %}
+      {% set queued_count = cache_status.environments | selectattr('status', 'equalto', 'queued') | list | length %}
+      {% set error_count = cache_status.environments | selectattr('status', 'equalto', 'error') | list | length %}
+      <details>
+        <summary class="status-summary">
+          <div>
+            <strong>Miljöstatus och cache</strong>
+            <span class="hint">
+              {% if running_count %}
+                {{ running_count }} miljö{{ 'er' if running_count != 1 else '' }} synkar just nu
+              {% elif queued_count %}
+                {{ queued_count }} miljö{{ 'er' if queued_count != 1 else '' }} köad{{ 'e' if queued_count != 1 else '' }}
+              {% elif error_count %}
+                {{ error_count }} miljö{{ 'er' if error_count != 1 else '' }} har fel
+              {% else %}
+                Ingen synk kör just nu
+              {% endif %}
+            </span>
+          </div>
+          <span class="status-summary-pill {% if running_count %}syncing{% elif error_count %}error{% else %}synced{% endif %}">
+            {% if running_count %}Synkar{% elif error_count %}Fel{% else %}Klar{% endif %}
+          </span>
+        </summary>
+
+        <div class="status-header inside-details">
+          <p class="hint">Visar senaste sync, pågående sync och senaste ändringskontroll. Cachen ligger på PVC och är alltid komplett/djup.</p>
+          <button class="secondary small" type="button" onclick="location.reload()">Uppdatera status</button>
+        </div>
+
+        <div class="env-status-grid">
+          {% for env_status in cache_status.environments %}
+            {% set syncing = env_status.status == 'syncing' %}
+            {% set pct = (env_status.progress_done * 100 / env_status.progress_total) if env_status.progress_total else 0 %}
+            <article class="env-status {{ env_status.status }}" data-env-status data-env="{{ env_status.env }}">
+              <div class="env-status-top">
+                <strong>{{ env_status.env }}</strong>
+                <span class="status-pill {{ env_status.status }}">
+                  {% if syncing %}Synkar{% elif env_status.status == 'queued' %}Köad{% elif env_status.status == 'error' %}Fel{% elif env_status.last_sync_at %}Synkad{% else %}Ej synkad{% endif %}
+                </span>
+              </div>
+              <div class="env-meta">
+                <span>Senast synkad: <b>{{ env_status.last_sync_at or 'aldrig' }}</b></span>
+                <span>Senast kontrollerad: <b>{{ env_status.last_checked_at or 'aldrig' }}</b></span>
+                <span>Objekt i cache: <b>{{ env_status.object_count }}</b></span>
+                {% if env_status.current_object %}<span>Nu: <b>{{ env_status.current_object }}</b></span>{% endif %}
+                {% if env_status.last_error %}<span class="sync-errors">{{ env_status.last_error }}</span>{% endif %}
+              </div>
+              {% if syncing or env_status.status == 'queued' %}
+                <div class="progress"><div style="width: {{ pct|round(0) }}%"></div></div>
+                <small>{{ env_status.progress_done }} / {{ env_status.progress_total }}</small>
+              {% endif %}
+            </article>
+          {% endfor %}
+        </div>
+
+        {% if last_sync_result and last_sync_result.errors %}
+          <details class="sync-errors">
+            <summary>Synkfel</summary>
+            <ul>
+              {% for err in last_sync_result.errors %}
+                <li><b>{{ err.env }} / {{ err.label }}</b>: {{ err.error }}</li>
+              {% endfor %}
+            </ul>
+          </details>
+        {% endif %}
+      </details>
     </section>
 
     {% if result_groups %}
       <section class="results-toolbar card slim">
         <strong>Resultat: {{ form.source_env }} → {{ form.target_env }}</strong>
-        <span>Börja med summeringen nedan. Expandera bara kategorier med avvikelser när du vill se exakt vilka fält som skiljer.</span>
+        <span>Börja med summeringen nedan. Expandera bara kategorier med avvikelser när du vill se exakt vilka fält som skiljer. <b>Komplett/djup jämförelse används alltid.</b></span>
       </section>
 
       <section class="category-overview" aria-label="Summerat jämförelseresultat">
@@ -152,15 +231,15 @@
                                 <div class="field-diff-list">
                                   {% for diff in row.field_diffs %}
                                     <details class="field-diff">
-                                      <summary>{{ diff.field }}</summary>
+                                      <summary>{{ diff.field_label or diff.field }}</summary>
                                       <div class="side-by-side">
                                         <div class="value-panel">
                                           <div class="value-title">{{ result.environments[0] }}</div>
-                                          <pre>{{ diff.left | string }}</pre>
+                                          <pre>{{ diff.left | pretty }}</pre>
                                         </div>
                                         <div class="value-panel">
                                           <div class="value-title">{{ result.environments[1] }}</div>
-                                          <pre>{{ diff.right | string }}</pre>
+                                          <pre>{{ diff.right | pretty }}</pre>
                                         </div>
                                       </div>
                                     </details>
@@ -185,6 +264,11 @@
     {% endif %}
   </main>
   <script>
+    const hasSyncing = document.querySelector('.env-status.syncing');
+    if (hasSyncing) {
+      window.setTimeout(() => location.reload(), 5000);
+    }
+
     document.querySelectorAll('[data-type-panel]').forEach((panel) => {
       const buttons = panel.querySelectorAll('[data-status-filter]');
       const buckets = panel.querySelectorAll('[data-status-bucket]');
@@ -200,6 +284,65 @@
         });
       });
     });
+  </script>
+
+  <script>
+    const syncRunningOnRender = {{ 'true' if sync_running else 'false' }};
+
+    function currentFormPayload(mode) {
+      const form = document.querySelector('form[action="/compare"]');
+      const data = new FormData(form);
+      return {
+        source_env: data.get('source_env'),
+        target_env: data.get('target_env'),
+        object_type: data.get('object_type') || 'all',
+        deep: true,
+        mode
+      };
+    }
+
+    async function startSync(mode) {
+      const buttons = document.querySelectorAll('[data-sync-mode]');
+      buttons.forEach(b => b.disabled = true);
+      try {
+        const res = await fetch('/api/sync/start', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(currentFormPayload(mode))
+        });
+        const payload = await res.json();
+        console.log('sync start', payload);
+        setTimeout(() => location.reload(), 800);
+      } catch (err) {
+        console.error(err);
+        buttons.forEach(b => b.disabled = false);
+        alert('Kunde inte starta synk. Se browser console eller pod-logg.');
+      }
+    }
+
+    document.querySelectorAll('[data-sync-mode]').forEach(button => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        startSync(button.dataset.syncMode);
+      });
+    });
+
+    async function pollSyncStatus() {
+      try {
+        const res = await fetch('/api/cache/status', {cache: 'no-store'});
+        const payload = await res.json();
+        const anySyncing = payload.sync_running || (payload.cache.environments || []).some(e => ['syncing','queued'].includes(e.status));
+        if (anySyncing) {
+          setTimeout(() => location.reload(), 2500);
+        }
+      } catch (err) {
+        console.debug('status poll failed', err);
+      }
+    }
+
+    if (syncRunningOnRender || document.querySelector('.env-status.syncing, .env-status.queued')) {
+      setTimeout(pollSyncStatus, 1500);
+    }
   </script>
 </body>
 </html>

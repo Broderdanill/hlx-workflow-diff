@@ -1,78 +1,98 @@
-# BMC HLX Workflow Diff
+# hlx-workflow-diff v17
 
-En liten Python/FastAPI-container för att jämföra workflow-metadata mellan BMC Helix Innovation Suite / AR System-miljöer.
+Webbverktyg för att jämföra workflow-metadata mellan BMC Helix Innovation Suite / AR System-miljöer.
 
-## Vad den gör
+## Viktigt i v17
 
-- Gränssnittet visar först hopfällda kategorier med totalsiffror. Inne i varje kategori kan du filtrera på Olika, Saknas och Lika.
-- Delar upp Active Link Guides, Filter Guides, Applications, Packing Lists och Web Services från containers via `containerType`.
-- Loggar in mot varje vald miljö med `/api/jwt/login`.
-- Läser metadata via AR REST API: `/api/arsys/v1/entry/<metadata-form>`.
-- Filtrerar med AR qualification (`q`) utifrån prefix och fritext.
-- Kan jämföra `Alla` objekttyper som standard, eller en specifik typ.
-- Normaliserar entries per objektnamn.
-- Visar vilka objekt som är lika, olika eller saknas, och visar fältdiff sida-vid-sida för ändrade objekt.
-- Sparar inget lokalt och använder ingen databas.
+Verktyget använder nu bara en cachetyp: komplett/djup snapshot.
 
-## Bygg och kör med Podman
+- Ingen separat standardcache.
+- GUI:t har inte längre val för snabb/djup jämförelse.
+- Jämförelser körs alltid mot komplett cache.
+- Vid pod-start gör appen automatiskt `auto sync`:
+  - saknas cache för en miljö/objekttyp → full djup sync för just den delen.
+  - finns cache → inkrementell kontroll och djup expansion endast för nya/ändrade objekt.
+- Intervallsync kontrollerar timestamps och uppdaterar objekttyper där ändringar finns.
+
+## Rekommenderad körning
 
 ```bash
 podman build -t localhost/hlx-workflow-diff:latest -f Containerfile .
 podman play kube podman-play-kube.yaml
 ```
 
-Öppna sedan: http://localhost:8089
-
-## Miljöer
-
-Miljöerna konfigureras server-side, inte i browsern. GUI:t visar bara två menyval: källmiljö och målmiljö. URL, användarnamn och lösenord skickas alltså inte ut till klienten.
-
-Redigera innan build:
+GUI:
 
 ```text
-config/hlx-diff.yaml
+http://localhost:8089
 ```
 
-Alternativt sätt `HELIX_CONFIG` till en annan sökväg eller använd `HELIX_ENVIRONMENTS_JSON`. Appen kräver inte `hostPath`, PVC eller databas.
+## Performance-inställningar
 
-## Viktigt om metadata-former
-
-BMC dokumenterar AR System Data Dictionary som tabeller för schema, fields, filters, escalations, active links, menyer och containers. I många Helix/Remedy-installationer exponeras dessa via `AR System Metadata:*`-former, men form- och fältnamn kan variera mellan versioner, overlays och behörigheter. Standardmappningen är uppdaterad från exporterade metadata-former: `actlink`, `filter` och `escalation` är med små bokstäver och fält som inte finns, t.ex. `elseQualification`, används inte längre. Därför ligger form- och fältnamn fortsatt i YAML-filen.
-
-Börja med läsbehörighet för servicekontot till metadata-formerna. Ett vanligt minimum är:
-
-- `AR System Metadata: actlink`
-- `AR System Metadata: filter`
-- `AR System Metadata: escalation`
-- eventuellt `AR System Metadata: arschema` och field-relaterade metadata-former om ni vill jämföra formulär/fält senare.
-
-## API
-
-Utöver GUI finns:
-
-```bash
-curl -X POST http://localhost:8089/api/compare \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "object_type":"all",
-    "source_env":"DEV",
-    "target_env":"TEST",
-    "prefix":"CHG:",
-    "ignore_fields":["timestamp"]
-  }'
+```yaml
+- name: HELIX_DEEP_PROFILE
+  value: balanced
+- name: HELIX_RELATED_FETCH_CONCURRENCY
+  value: "6"
+- name: HELIX_SYNC_INTERVAL_SECONDS
+  value: "900"
+- name: LOG_LEVEL
+  value: INFO
 ```
 
-## Nästa naturliga förbättringar
+`balanced` är tänkt som Migrator-lik nivå. `full` hämtar fler äldre/ovanliga relaterade metadata-former och kan ta betydligt längre tid.
 
-- Export till JSON/CSV.
-- Podman/Kubernetes secrets för credentials i stället för klartext i YAML.
-- Djupare parsning av actions om ni vill jämföra action-rader separat i stället för hela metadatafält.
-- Read-only credential vault via Kubernetes/Podman secret i stället för YAML-fil.
-- Finjusterad mapping om er miljö använder andra `containerType`-värden för guides, applications, packing lists eller web services.
-- Export till JSON/CSV.
+För felsökning:
+
+```yaml
+- name: LOG_LEVEL
+  value: DEBUG
+```
+
+## v16 - Migrator-lik sync/cache
+
+Denna version använder bara en komplett/djup cache, men synken är mer lik gamla Migrator:
+
+- Första körningen bygger en full djup snapshot per miljö och objekttyp.
+- När cache finns körs inkrementell sync.
+- Inkrementell sync läser först basmetadata för objekttypen.
+- Objekt som är oförändrade återanvänder redan cachad djupmetadata.
+- Nya/ändrade objekt får djupmetadata hämtad selektivt via parent-id-filter.
+- Borttagna objekt tas bort från cache.
+- Miljöer, objekttyper och relaterade metadata-former hämtas parallellt.
+
+Nya prestanda-env:
+
+```yaml
+HELIX_ENV_CONCURRENCY: "2"
+HELIX_OBJECT_CONCURRENCY: "2"
+HELIX_RELATED_FETCH_CONCURRENCY: "3"
+HELIX_RELATED_BATCH_CONCURRENCY: "3"
+HELIX_RELATED_PARENT_BATCH_SIZE: "25"
+HELIX_HTTP_TIMEOUT: "300"
+```
+
+Öka försiktigt om AR-servern och databasen orkar. Vid första fulla cachen är det fortfarande mycket data, men efter det ska normal sync i första hand läsa basmetadata och bara djup-expanda ändringar.
 
 
-## v7
+## v17 - Migrator-likare och snabbare första cache
 
-- Lägger till en summerad översikt ovanför kategorierna så man direkt ser om varje kategori är helt lika eller har avvikelser.
-- Kategoriheadern visar tydligt "Alla objekt matchar" eller antal avvikelser utan att behöva expandera.
+- Tunga relaterade metadata-former hämtas inte längre helt ofiltrerat.
+- Även första fulla cachen använder parent-scopade q-batcher mot relaterade metadata-former.
+- Batcher hämtas parallellt men med lägre standardvärden för att inte överbelasta AR-servern.
+- Startup använder `auto`: bara saknade cache-delar fullsynkas, befintliga delar körs inkrementellt.
+- Statuspanelen **Miljöstatus och cache** är hopfälld som standard och visar direkt om något kör.
+- Detaljlistan **Visa cache per objekttyp** är borttagen från GUI:t.
+
+Bra startvärden:
+
+```yaml
+HELIX_ENV_CONCURRENCY: "2"
+HELIX_OBJECT_CONCURRENCY: "2"
+HELIX_RELATED_FETCH_CONCURRENCY: "3"
+HELIX_RELATED_BATCH_CONCURRENCY: "3"
+HELIX_RELATED_PARENT_BATCH_SIZE: "25"
+HELIX_HTTP_TIMEOUT: "300"
+```
+
+Om AR-servern verkar må bra kan du öka `HELIX_OBJECT_CONCURRENCY` eller `HELIX_RELATED_BATCH_CONCURRENCY` ett steg i taget.

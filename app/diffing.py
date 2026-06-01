@@ -37,6 +37,10 @@ def compare_by_name(env_data: dict[str, dict[str, dict[str, Any]]]) -> dict[str,
     return {"environments": envs, "rows": rows, "summary": summary}
 
 
+def _field_label(field: str) -> str:
+    return "Djup metadata / relaterade actions" if field == "__deep_metadata" else field
+
+
 def field_diffs(objects: dict[str, Any]) -> list[dict[str, Any]]:
     fields = set()
     envs = list(objects.keys())
@@ -44,11 +48,16 @@ def field_diffs(objects: dict[str, Any]) -> list[dict[str, Any]]:
         if obj:
             fields.update(obj.get("values", {}).keys())
     diffs: list[dict[str, Any]] = []
-    for field in sorted(fields):
+
+    def sort_key(field: str):
+        return (1 if field == "__deep_metadata" else 0, field)
+
+    for field in sorted(fields, key=sort_key):
         values = {env: (obj.get("values", {}).get(field) if obj else None) for env, obj in objects.items()}
         if len({repr(v) for v in values.values()}) > 1:
             diffs.append({
                 "field": field,
+                "field_label": _field_label(field),
                 "values": values,
                 "left": values.get(envs[0]) if len(envs) > 0 else None,
                 "right": values.get(envs[1]) if len(envs) > 1 else None,
