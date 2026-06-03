@@ -34,9 +34,9 @@ class CacheScope:
         payload = self.normalized()
         # Bump this when scope semantics change so old PVC cache created with a
         # broader/buggy scope is not reused silently.
-        payload["scope_model"] = "form-prefix-schemaid-int-workflowid-v10-search-index-secret"
+        payload["scope_model"] = "form-prefix-schemaid-int-workflowid-v11-migrator-deep-diff"
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        empty = {"exclude_form_prefixes": [], "include_form_prefixes": [], "scope_model": "form-prefix-schemaid-int-workflowid-v10-search-index-secret"}
+        empty = {"exclude_form_prefixes": [], "include_form_prefixes": [], "scope_model": "form-prefix-schemaid-int-workflowid-v11-migrator-deep-diff"}
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16] if payload != empty else ""
 
 

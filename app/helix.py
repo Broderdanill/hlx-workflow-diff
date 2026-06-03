@@ -287,7 +287,26 @@ def build_qualification(obj_type: ObjectType, prefix: str | None = None, contain
     return " AND ".join(clauses)
 
 
+
+def _normalize_schema_id(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if "-" in text and text.split("-", 1)[0].isdigit():
+        return text.split("-", 1)[0]
+    return text
+
 def _id_for(values: dict[str, Any], obj_type: ObjectType) -> str | None:
+    # Forms are special: related metadata uses the numeric schemaId, while the
+    # REST entry id/request id is often exposed as e.g. "5008-1". Normalize that
+    # to "5008" so fields, views, permissions and indexes are actually linked.
+    if obj_type.key == "form":
+        for field in ("schemaId", "schemaID", "schema_id", "Request ID", "Record ID"):
+            sid = _normalize_schema_id(values.get(field))
+            if sid:
+                return sid
     for field in obj_type.id_fields:
         value = values.get(field)
         if value not in (None, ""):
@@ -301,8 +320,19 @@ def _id_for(values: dict[str, Any], obj_type: ObjectType) -> str | None:
 
 
 def _canonical_related_values(values: dict[str, Any], rel: RelatedForm, ignore_fields: set[str]) -> dict[str, Any]:
+    # Strip environment-specific AR row ids. Parent ids are kept where useful for
+    # grouping/identity before diff normalization, but Request ID/Record ID must
+    # not make two equivalent environments differ.
     ignored = {"Request ID", "Record ID", "SystemID", "IntegerID", "Box1", "Box2"} | ignore_fields
-    return {k: v for k, v in values.items() if k not in ignored}
+    cleaned = {k: v for k, v in values.items() if k not in ignored}
+    # Normalize schemaId values in related form metadata too. Some REST entries
+    # expose schemaId-like ids as "5008-1" while dictionary relations use 5008.
+    for key in ("schemaId", "schemaID", "schema_id"):
+        if key in cleaned:
+            norm = _normalize_schema_id(cleaned.get(key))
+            if norm is not None:
+                cleaned[key] = norm
+    return cleaned
 
 
 def group_related(rel: RelatedForm, entries: list[dict[str, Any]], ignore_fields: set[str]) -> dict[str, list[dict[str, Any]]]:

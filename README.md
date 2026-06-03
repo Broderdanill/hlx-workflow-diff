@@ -315,3 +315,22 @@ Form-prefix scope now uses the AR System data-dictionary `schemaId` value from `
 - ConfigMap default scope corrected to include `HLX*` and `AR*`.
 - Active Link Guides / Filter Guides now fetch `AR System Metadata: arcontainer` without a qualification and filter locally to avoid `citext = integer` errors from Helix/PostgreSQL metadata view forms.
 - GUI sync status now updates with `fetch('/api/cache/status')` and only re-renders the status panel, instead of reloading the whole page while sync is running.
+
+## v28.14 - djupare Migrator-lik diff
+
+Denna version reviderar jämförelsemotorn så att miljöspecifika tekniska id:n inte längre skapar falska differenser.
+Exempel på sådana fält är `Request ID`, `Record ID`, `schemaId`, `actlinkId`, `filterId`, `containerId`, `Active Link ID`, `Filter ID`, `Container ID` och motsvarande.
+
+Djupmetadata jämförs nu rad-för-rad med stabila nycklar:
+
+- Formulärfält jämförs per `fieldName`/`fieldId`.
+- Field permissions jämförs per `fieldId + groupId`.
+- Enum-värden jämförs per fält och enumvärde.
+- VUI/vyer jämförs per `vuiName`/`vuiId`.
+- View mapping jämförs per fält/extField.
+- Workflow actions jämförs per `actionIndex` och action-specifika fält.
+- Guide references jämförs per `referenceOrder`/referens.
+
+Det betyder att du inte bara ser att exempelvis ett formulär skiljer sig, utan också vilket relaterat fält, vy, permission, action eller guide-medlem som saknas eller avviker.
+
+Formulärens interna REST-id normaliseras också från exempelvis `5008-1` till dictionary-id `5008` när relaterade formulärfält, vyer och permissions hämtas.

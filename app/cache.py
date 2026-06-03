@@ -10,6 +10,7 @@ import time
 
 from .config import Environment, ObjectType
 from .helix import fingerprint
+from .diffing import comparable_values
 
 
 log = logging.getLogger("hlx.workflow_diff.cache")
@@ -383,9 +384,10 @@ def objects_from_cache(env: Environment, obj_type: ObjectType, deep: bool, prefi
         values = dict(obj.get("values", {}) or {})
         if not deep:
             values.pop("__deep_metadata", None)
+        comparable = comparable_values({**obj, "values": values}, ignore_fields | {obj_type.name_field})
         result[name] = {
             **obj,
             "values": values,
-            "fingerprint": fingerprint(values, ignore_fields | {obj_type.name_field, "Request ID", "Record ID"}),
+            "fingerprint": fingerprint(comparable, set()),
         }
     return result

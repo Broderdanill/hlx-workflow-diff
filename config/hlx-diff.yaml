@@ -1,0 +1,11 @@
+environments:
+  - name: um
+    base_url: http://ars-arserver:8008
+    verify_tls: false
+  - name: utb
+    base_url: http://ars-arserver:8008
+    verify_tls: false
+
+cache_scope:
+  include_form_prefixes: [HLX*,AR*]
+  exclude_form_prefixes: []

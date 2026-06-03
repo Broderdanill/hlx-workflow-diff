@@ -944,7 +944,7 @@ async def compare_one_type(envs: list[Environment], obj_type: ObjectType, prefix
     result = compare_by_name(dict(collected))
     for row in result["rows"]:
         if row["status"] == "different":
-            row["field_diffs"] = field_diffs(row["objects"])
+            row["field_diffs"] = field_diffs(row["objects"], ignore_fields)
     return result
 
 
