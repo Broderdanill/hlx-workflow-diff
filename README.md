@@ -1,5 +1,13 @@
 # Helix Workflow Diff
 
+## Version 28.13
+
+- Miljö-URL och cache-scope ligger i ConfigMap.
+- Användarnamn och lösenord ligger i Secret och exponeras som `UM_USERNAME`, `UM_PASSWORD`, `UTB_USERNAME`, `UTB_PASSWORD` osv.
+- Jämförelse/sökning använder ett lokalt sökindex (`*.index.json`) bredvid cachefilerna på PVC. Indexet byggs vid sync och byggs lazy vid första sökning om äldre cache saknar index.
+- Miljöstatus i GUI är vänsterjusterad och uppdateras utan att hela sidan laddas om.
+
+
 Helix Workflow Diff är ett lättviktsverktyg för att jämföra workflow-metadata mellan BMC Helix Innovation Suite / AR System-miljöer via REST API.
 
 Verktyget är byggt för att fungera ungefär som en enkel Migrator-lik jämförelsevy:

@@ -6,12 +6,16 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+import time
 
 from .config import Environment, ObjectType
 from .helix import fingerprint
 
 
 log = logging.getLogger("hlx.workflow_diff.cache")
+
+_PAYLOAD_CACHE: dict[tuple[str, str, bool], tuple[float, dict[str, Any]]] = {}
+_INDEX_CACHE: dict[tuple[str, str, bool], tuple[float, dict[str, Any]]] = {}
 
 
 def cache_dir() -> Path:
@@ -27,6 +31,11 @@ def _safe(value: str) -> str:
 def cache_path(env_name: str, object_key: str, deep: bool) -> Path:
     suffix = "deep" if deep else "standard"
     return cache_dir() / f"{_safe(env_name)}__{_safe(object_key)}__{suffix}.json"
+
+
+def index_path(env_name: str, object_key: str, deep: bool) -> Path:
+    suffix = "deep" if deep else "standard"
+    return cache_dir() / f"{_safe(env_name)}__{_safe(object_key)}__{suffix}.index.json"
 
 
 def state_path() -> Path:
@@ -82,6 +91,94 @@ def append_job(job: dict[str, Any], keep: int = 30) -> None:
     write_state(state)
 
 
+
+def _norm(value: Any) -> str:
+    return str(value or "").casefold()
+
+
+def _index_text(obj: dict[str, Any], obj_type: ObjectType) -> str:
+    values = obj.get("values", {}) or {}
+    parts = [obj.get("name", "")]
+    for field in obj_type.search_fields or [obj_type.name_field]:
+        val = values.get(field)
+        if val is not None:
+            parts.append(val)
+    return "\n".join(_norm(x) for x in parts if x is not None)
+
+
+def build_search_index(obj_type: ObjectType, objects: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    entries = []
+    prefix_map: dict[str, list[str]] = {}
+    for name, obj in objects.items():
+        name_text = _norm(obj.get("name") or name)
+        search_text = _index_text(obj, obj_type)
+        entries.append({"name": name, "name_lower": name_text, "search_text": search_text})
+        # Prefix acceleration. Index reasonably short prefixes; longer prefixes still scan entries.
+        compact = name_text.replace(" ", "")
+        for i in range(1, min(len(compact), 24) + 1):
+            prefix_map.setdefault(compact[:i], []).append(name)
+    return {"built_at": now_iso(), "count": len(entries), "entries": entries, "prefix_map": prefix_map}
+
+
+def save_search_index(env_name: str, obj_type: ObjectType, deep: bool, objects: dict[str, dict[str, Any]]) -> None:
+    path = index_path(env_name, obj_type.key, deep)
+    payload = {
+        "env": env_name,
+        "object_type": obj_type.key,
+        "deep": deep,
+        "scope_signature": active_scope_signature(),
+        "index": build_search_index(obj_type, objects),
+    }
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str), encoding="utf-8")
+    tmp.replace(path)
+    _INDEX_CACHE.pop((env_name, obj_type.key, deep), None)
+    log.info("search index saved env=%s type=%s deep=%s path=%s count=%s", env_name, obj_type.key, deep, path, len(objects))
+
+
+def load_search_index(env_name: str, obj_type: ObjectType, deep: bool) -> dict[str, Any] | None:
+    path = index_path(env_name, obj_type.key, deep)
+    if not path.exists():
+        return None
+    try:
+        mtime = path.stat().st_mtime
+        key = (env_name, obj_type.key, deep)
+        cached = _INDEX_CACHE.get(key)
+        if cached and cached[0] == mtime:
+            return cached[1]
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if (payload.get("scope_signature") or "") != active_scope_signature():
+            return None
+        _INDEX_CACHE[key] = (mtime, payload)
+        return payload
+    except Exception as exc:
+        log.warning("search index load failed env=%s type=%s: %s", env_name, obj_type.key, exc)
+        return None
+
+
+def _candidate_names_from_index(env_name: str, obj_type: ObjectType, deep: bool, prefix: str | None, contains: str | None) -> set[str] | None:
+    idx_payload = load_search_index(env_name, obj_type, deep)
+    if not idx_payload:
+        return None
+    idx = idx_payload.get("index") or {}
+    entries = idx.get("entries") or []
+    prefix_value = _norm(str(prefix or "").strip().rstrip("*"))
+    contains_value = _norm(str(contains or "").strip())
+    if not prefix_value and not contains_value:
+        return None
+    if prefix_value and not contains_value:
+        names = idx.get("prefix_map", {}).get(prefix_value.replace(" ", ""))
+        if names is not None:
+            return set(names)
+    result: set[str] = set()
+    for row in entries:
+        if prefix_value and not str(row.get("name_lower", "")).startswith(prefix_value):
+            continue
+        if contains_value and contains_value not in str(row.get("search_text", "")):
+            continue
+        result.add(row.get("name"))
+    return {x for x in result if x}
+
 def save_cache(env_name: str, obj_type: ObjectType, deep: bool, objects: dict[str, dict[str, Any]]) -> dict[str, Any]:
     log.info("cache save start env=%s type=%s deep=%s objects=%s", env_name, obj_type.key, deep, len(objects))
     payload = {
@@ -100,6 +197,11 @@ def save_cache(env_name: str, obj_type: ObjectType, deep: bool, objects: dict[st
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str), encoding="utf-8")
     tmp.replace(path)
+    _PAYLOAD_CACHE.pop((env_name, obj_type.key, deep), None)
+    try:
+        save_search_index(env_name, obj_type, deep, objects)
+    except Exception as exc:
+        log.warning("search index save failed env=%s type=%s: %s", env_name, obj_type.key, exc)
     log.info("cache saved env=%s type=%s deep=%s path=%s count=%s max_timestamp=%s", env_name, obj_type.key, deep, path, len(objects), payload["max_timestamp"])
     return {
         "env": env_name,
@@ -117,7 +219,14 @@ def load_cache(env_name: str, obj_type: ObjectType, deep: bool) -> dict[str, Any
     if not path.exists():
         log.debug("cache miss env=%s type=%s deep=%s path=%s", env_name, obj_type.key, deep, path)
         return None
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    key = (env_name, obj_type.key, deep)
+    mtime = path.stat().st_mtime
+    cached = _PAYLOAD_CACHE.get(key)
+    if cached and cached[0] == mtime:
+        payload = cached[1]
+    else:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        _PAYLOAD_CACHE[key] = (mtime, payload)
     current_sig = active_scope_signature()
     cached_sig = payload.get("scope_signature", "") or ""
     if current_sig and cached_sig != current_sig:
@@ -257,9 +366,19 @@ def objects_from_cache(env: Environment, obj_type: ObjectType, deep: bool, prefi
     payload = load_cache(env.name, obj_type, deep)
     if not payload:
         raise FileNotFoundError(f"Ingen komplett cache finns för {env.name}/{obj_type.label}. Synka miljön först.")
+    objects = payload.get("objects") or {}
+    candidates = _candidate_names_from_index(env.name, obj_type, deep, prefix, contains)
+    if (prefix or contains) and candidates is None:
+        # Older cache may not have an index yet. Build it lazily once so repeated GUI searches are fast.
+        try:
+            save_search_index(env.name, obj_type, deep, objects)
+            candidates = _candidate_names_from_index(env.name, obj_type, deep, prefix, contains)
+        except Exception as exc:
+            log.warning("lazy search index build failed env=%s type=%s: %s", env.name, obj_type.key, exc)
+    iterable = ((name, objects[name]) for name in candidates if name in objects) if candidates is not None else objects.items()
     result: dict[str, dict[str, Any]] = {}
-    for name, obj in (payload.get("objects") or {}).items():
-        if not _matches_cached(obj, obj_type, prefix, contains):
+    for name, obj in iterable:
+        if candidates is None and not _matches_cached(obj, obj_type, prefix, contains):
             continue
         values = dict(obj.get("values", {}) or {})
         if not deep:

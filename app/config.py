@@ -34,9 +34,9 @@ class CacheScope:
         payload = self.normalized()
         # Bump this when scope semantics change so old PVC cache created with a
         # broader/buggy scope is not reused silently.
-        payload["scope_model"] = "form-prefix-schemaid-int-workflowid-v9-arcontainer-local"
+        payload["scope_model"] = "form-prefix-schemaid-int-workflowid-v10-search-index-secret"
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        empty = {"exclude_form_prefixes": [], "include_form_prefixes": [], "scope_model": "form-prefix-schemaid-int-workflowid-v9-arcontainer-local"}
+        empty = {"exclude_form_prefixes": [], "include_form_prefixes": [], "scope_model": "form-prefix-schemaid-int-workflowid-v10-search-index-secret"}
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16] if payload != empty else ""
 
 
@@ -260,11 +260,47 @@ def resolve_config_path() -> str | None:
     return None
 
 
+def _credential_env_names(env_name: str, key: str) -> list[str]:
+    safe = "".join(ch if ch.isalnum() else "_" for ch in env_name).upper()
+    return [
+        f"{safe}_{key.upper()}",
+        f"HELIX_{safe}_{key.upper()}",
+        f"HELIX_ENV_{safe}_{key.upper()}",
+    ]
+
+
+def _env_credential(env_name: str, key: str) -> str | None:
+    for name in _credential_env_names(env_name, key):
+        value = os.getenv(name)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _environment_from_yaml(item: dict) -> Environment:
+    item = dict(item)
+    name = str(item.get("name", "")).strip()
+    if not name:
+        raise ValueError("Environment saknar name i konfigurationen")
+    username = item.get("username") or _env_credential(name, "username")
+    password = item.get("password") or _env_credential(name, "password")
+    auth_string = item.get("auth_string") or _env_credential(name, "auth_string")
+    if not username and not auth_string:
+        raise ValueError(f"Environment {name} saknar username. Lägg det i Secret som { _credential_env_names(name, 'username')[0] }.")
+    if not password and not auth_string:
+        raise ValueError(f"Environment {name} saknar password. Lägg det i Secret som { _credential_env_names(name, 'password')[0] }.")
+    item["username"] = username or ""
+    item["password"] = password or ""
+    if auth_string:
+        item["auth_string"] = auth_string
+    return Environment(**item)
+
+
 def _load_yaml(path: str | None) -> tuple[list[Environment], list[ObjectType], CacheScope]:
     if not path or not Path(path).exists():
         return [], [], CacheScope()
     doc = yaml.safe_load(Path(path).read_text()) or {}
-    envs = [Environment(**item) for item in doc.get("environments", [])]
+    envs = [_environment_from_yaml(item) for item in doc.get("environments", [])]
     types = [_object_type_from_yaml(item) for item in doc.get("object_types", [])]
     scope_doc = doc.get("cache_scope", {}) or {}
     scope = CacheScope(

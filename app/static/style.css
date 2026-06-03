@@ -342,3 +342,12 @@ body.blade-open{overflow:hidden}
   .filters-with-ignore{grid-template-columns:1fr;}
   .metadata-field-inline .metadata-menu{width:100%;max-width:none;}
 }
+
+
+/* v28.13: cleaner left-aligned sync status */
+.cache-card, .status-summary, .status-header, .env-status { text-align: left; }
+.status-summary { align-items: flex-start; }
+.status-summary > div { align-items: flex-start; text-align: left; }
+.status-summary .hint { margin: 0; }
+.inside-details { align-items: center; }
+
