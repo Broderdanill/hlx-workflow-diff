@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Helix Workflow Diff</title>
-  <link rel="stylesheet" href="/static/style.css?v=24">
+  <link rel="stylesheet" href="/static/style.css?v=26">
 </head>
 <body>
   <main>
@@ -161,6 +161,7 @@
       </details>
     </section>
 
+
     {% if result_groups %}
       <section class="results-toolbar card slim">
         <strong>Resultat: {{ form.source_env }} → {{ form.target_env }}</strong>
@@ -213,10 +214,11 @@
                 {% if bucket.rows %}
                   <div class="table-wrap">
                     <table>
-                      <thead><tr><th>Objekt</th><th>Status</th><th>Detaljer</th></tr></thead>
+                      <thead><tr><th class="select-col">Välj</th><th>Objekt</th><th>Status</th><th>Detaljer</th></tr></thead>
                       <tbody>
                       {% for row in bucket.rows %}
                         <tr class="{{ row.status }}">
+                          <td class="select-col"><input type="checkbox" class="transport-select" data-transport-select data-object-type="{{ group.type.key }}" data-object-label="{{ group.type.label }}" data-object-name="{{ row.name }}" data-object-status="{{ row.status }}" aria-label="Välj {{ row.name }} för migrering"></td>
                           <td class="object-name">{{ row.name }}</td>
                           <td><span class="pill">{{ row.status_label }}</span></td>
                           <td>
@@ -244,6 +246,7 @@
                               </details>
                             {% endif %}
                           </td>
+
                         </tr>
                       {% endfor %}
                       </tbody>
@@ -259,6 +262,63 @@
       {% endfor %}
     {% endif %}
   </main>
+
+  <div class="transport-dock" data-transport-dock>
+    <div class="transport-dock-main">
+      <div>
+        <strong>Migrering</strong>
+        <span class="hint"><span data-selected-transport-count>0</span> markerade • <span data-transport-count>0 objekt</span> i listan</span>
+      </div>
+      <div class="transport-dock-actions">
+        <button type="button" class="secondary small" data-transport-add-selected disabled>Lägg till markerade</button>
+        <button type="button" class="small" data-transport-open>Deploy / öppna lista</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="blade-backdrop" data-transport-blade-backdrop aria-hidden="true" hidden></div>
+  <aside class="transport-blade" data-transport-blade aria-hidden="true" hidden role="dialog" aria-modal="true" aria-labelledby="transport-blade-title">
+    <div class="transport-blade-header">
+      <div>
+        <p class="eyebrow">Transport</p>
+        <h2 id="transport-blade-title">Migreringslista</h2>
+        <p>Valda objekt exporteras till en DEF-fil från källmiljön och laddas upp i ett RDA-paket på målmiljön. Kör Build/Deploy där efter manuell kontroll. Ingen deploy startas automatiskt.</p>
+      </div>
+      <button type="button" class="icon-button" data-transport-close aria-label="Stäng migreringslista">×</button>
+    </div>
+    <div class="transport-blade-body">
+      <div class="grid filters transport-grid">
+        <label>Källmiljö
+          <select data-transport-source>
+            {% for env in envs %}
+              <option value="{{ env.name }}" {% if form and form.source_env == env.name %}selected{% endif %}>{{ env.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Målmiljö
+          <select data-transport-target>
+            {% for env in envs %}
+              <option value="{{ env.name }}" {% if form and form.target_env == env.name %}selected{% endif %}>{{ env.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <div class="transport-basket" data-transport-basket>
+        <div class="transport-basket-header">
+          <strong>Objekt i migreringslistan</strong>
+          <span class="hint" data-transport-count>0 objekt</span>
+        </div>
+        <div class="transport-basket-empty" data-transport-empty>Listan är tom. Markera objekt i diffresultatet och klicka “Lägg till markerade”.</div>
+        <div class="transport-basket-items" data-transport-items></div>
+      </div>
+      <div class="actions split-actions transport-actions">
+        <button type="button" data-transport-deploy>Skapa RDA-paket</button>
+        <button type="button" class="secondary danger-lite" data-transport-clear>Töm lista</button>
+      </div>
+      <div class="transport-result" data-transport-result hidden></div>
+    </div>
+  </aside>
+
 
   <div class="blade-backdrop" data-info-blade-backdrop aria-hidden="true" hidden></div>
   <aside class="info-blade" data-info-blade aria-hidden="true" hidden role="dialog" aria-modal="true" aria-labelledby="info-blade-title">
@@ -506,6 +566,227 @@
       box.addEventListener('change', updateIgnoreSummary);
     });
     updateIgnoreSummary();
+  </script>
+
+
+  <script>
+    const transportResult = document.querySelector('[data-transport-result]');
+    const transportItemsEl = document.querySelector('[data-transport-items]');
+    const transportEmptyEl = document.querySelector('[data-transport-empty]');
+    const transportCountEls = document.querySelectorAll('[data-transport-count]');
+    const selectedTransportCountEl = document.querySelector('[data-selected-transport-count]');
+    const addSelectedButton = document.querySelector('[data-transport-add-selected]');
+    const transportBlade = document.querySelector('[data-transport-blade]');
+    const transportBackdrop = document.querySelector('[data-transport-blade-backdrop]');
+    const transportStorageKey = 'hlxWorkflowDiff.transportBasket.v2';
+
+    function transportEscape(value) {
+      return String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    function renderTransportValue(label, value) {
+      if (value === undefined || value === null || value === '') return '';
+      return `<div><strong>${transportEscape(label)}</strong><span>${transportEscape(value)}</span></div>`;
+    }
+
+    function getTransportContext() {
+      return {
+        source_env: document.querySelector('[data-transport-source]')?.value || '',
+        target_env: document.querySelector('[data-transport-target]')?.value || '',
+      };
+    }
+
+    function getTransportBasket() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(transportStorageKey) || '[]');
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (_) {
+        return [];
+      }
+    }
+
+    function saveTransportBasket(items) {
+      localStorage.setItem(transportStorageKey, JSON.stringify(items));
+      renderTransportBasket();
+    }
+
+    function transportItemKey(item) {
+      return `${item.object_type || ''}::${String(item.object_name || '').toLowerCase()}`;
+    }
+
+    function normalizeTransportItem(item) {
+      const objectName = String(item.object_name || '').trim();
+      if (!objectName) return null;
+      return {
+        object_type: item.object_type || '',
+        object_label: item.object_label || item.object_type || 'Objekt',
+        object_name: objectName,
+        source_env: getTransportContext().source_env,
+        target_env: getTransportContext().target_env,
+        added_at: new Date().toISOString(),
+      };
+    }
+
+    function addTransportItems(items) {
+      const current = getTransportBasket();
+      let added = 0;
+      items.forEach((item) => {
+        const normalized = normalizeTransportItem(item);
+        if (!normalized) return;
+        if (!current.some((existing) => transportItemKey(existing) === transportItemKey(normalized))) {
+          current.push(normalized);
+          added += 1;
+        }
+      });
+      saveTransportBasket(current);
+      return added;
+    }
+
+    function removeTransportItem(key) {
+      saveTransportBasket(getTransportBasket().filter((item) => transportItemKey(item) !== key));
+    }
+
+    function selectedTransportItems() {
+      return Array.from(document.querySelectorAll('[data-transport-select]:checked')).map((box) => ({
+        object_type: box.getAttribute('data-object-type'),
+        object_label: box.getAttribute('data-object-label'),
+        object_name: box.getAttribute('data-object-name'),
+      }));
+    }
+
+    function updateSelectedTransportCount() {
+      const count = selectedTransportItems().length;
+      if (selectedTransportCountEl) selectedTransportCountEl.textContent = count;
+      if (addSelectedButton) addSelectedButton.disabled = count === 0;
+    }
+
+    function renderTransportBasket() {
+      if (!transportItemsEl || !transportEmptyEl) return;
+      const items = getTransportBasket();
+      transportCountEls.forEach((el) => { el.textContent = `${items.length} objekt`; });
+      transportEmptyEl.hidden = items.length > 0;
+      transportItemsEl.innerHTML = items.map((item) => {
+        const key = transportEscape(transportItemKey(item));
+        return `<div class="transport-basket-item">
+          <div>
+            <strong>${transportEscape(item.object_name)}</strong>
+            <span>${transportEscape(item.object_label || item.object_type || 'Objekt')}</span>
+          </div>
+          <button type="button" class="secondary small" data-transport-remove="${key}">Ta bort</button>
+        </div>`;
+      }).join('');
+      transportItemsEl.querySelectorAll('[data-transport-remove]').forEach((button) => {
+        button.addEventListener('click', () => removeTransportItem(button.getAttribute('data-transport-remove')));
+      });
+    }
+
+    function openTransportBlade() {
+      if (!transportBlade || !transportBackdrop) return;
+      transportBlade.hidden = false;
+      transportBackdrop.hidden = false;
+      transportBlade.setAttribute('aria-hidden', 'false');
+      transportBackdrop.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('blade-open');
+    }
+
+    function closeTransportBlade() {
+      if (!transportBlade || !transportBackdrop) return;
+      transportBlade.setAttribute('aria-hidden', 'true');
+      transportBackdrop.setAttribute('aria-hidden', 'true');
+      transportBlade.hidden = true;
+      transportBackdrop.hidden = true;
+      document.body.classList.remove('blade-open');
+    }
+
+    document.querySelectorAll('[data-transport-select]').forEach((box) => {
+      box.addEventListener('change', updateSelectedTransportCount);
+    });
+
+    addSelectedButton?.addEventListener('click', () => {
+      const items = selectedTransportItems();
+      addTransportItems(items);
+      document.querySelectorAll('[data-transport-select]:checked').forEach((box) => { box.checked = false; });
+      updateSelectedTransportCount();
+      openTransportBlade();
+    });
+
+    document.querySelector('[data-transport-open]')?.addEventListener('click', openTransportBlade);
+    document.querySelector('[data-transport-close]')?.addEventListener('click', closeTransportBlade);
+    transportBackdrop?.addEventListener('click', closeTransportBlade);
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') closeTransportBlade();
+    });
+
+    document.querySelector('[data-transport-clear]')?.addEventListener('click', () => {
+      if (confirm('Töm migreringslistan?')) saveTransportBasket([]);
+    });
+
+    async function postTransportDeploy() {
+      if (!transportResult) return;
+      const ctx = getTransportContext();
+      const items = getTransportBasket();
+      transportResult.hidden = false;
+      if (!items.length) {
+        transportResult.innerHTML = '<div class="message">Migreringslistan är tom.</div>';
+        return;
+      }
+      if (!confirm('Skapa DEF och ladda upp RDA-paket i målmiljön? Ingen deploy startas automatiskt.')) return;
+      transportResult.innerHTML = '<p class="hint">Skapar DEF och RDA-paket i målmiljön...</p>';
+      try {
+        const res = await fetch('/api/transport/deploy', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({...ctx, items, create_rda_draft: true}),
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          const details = (data.errors || []).map((item) => `<li>${transportEscape(item.object_name || '')}: ${transportEscape(item.error || '')}</li>`).join('');
+          transportResult.innerHTML = `<div class="error">${transportEscape(data.error || 'DEF-export misslyckades.')}${details ? `<ul>${details}</ul>` : ''}</div>`;
+          return;
+        }
+        const rows = (data.exported || []).map((item) => `<tr>
+          <td>${transportEscape(item.object_label || item.object_type)}</td>
+          <td>${transportEscape(item.object_name)}</td>
+          <td>${transportEscape(item.version_id || '')}</td>
+          <td>${transportEscape(item.modified_date || '')}</td>
+          <td>${transportEscape(item.bytes || '')}</td>
+        </tr>`).join('');
+        const errors = (data.errors || []).length ? `<details class="transport-manifest"><summary>Visa objekt som inte exporterades (${data.errors.length})</summary><ul>${data.errors.map((item) => `<li>${transportEscape(item.object_name || '')}: ${transportEscape(item.error || '')}</li>`).join('')}</ul></details>` : '';
+        const rda = data.rda_draft || {};
+        const rdaStatus = rda.created
+          ? `<div class="message">RDA-paket skapat på <strong>${transportEscape(ctx.target_env || rda.target_env || '')}</strong>: <strong>${transportEscape(rda.package_name || '')}</strong><br><span class="hint">Öppna Deployment Console på målmiljön, kontrollera DEF-filen och kör Build/Deploy där.</span></div>`
+          : `<div class="warning">DEF-fil skapades, men RDA-paket skapades inte: ${transportEscape(rda.error || 'okänt fel')}</div>`;
+        const uploadErrors = (rda.upload_errors || []).length ? `<details class="transport-manifest"><summary>Visa upload-varningar (${rda.upload_errors.length})</summary><ul>${rda.upload_errors.map((item) => `<li>${transportEscape(item)}</li>`).join('')}</ul></details>` : '';
+        const dataEntries = rda.data_entry_id ? `<details class="transport-manifest"><summary>Visa skapad contentrad</summary><ul><li>Definition_File — ${transportEscape(rda.data_entry_id || '')}</li></ul></details>` : '';
+        transportResult.innerHTML = `<div class="transport-preview-card">
+          <h3>RDA-paket skapat</h3>
+          <p class="hint">${transportEscape(data.next_step || '')}</p>
+          ${rdaStatus}
+          <div class="transport-kv">
+            ${renderTransportValue('Källa', data.source_env)}
+            ${renderTransportValue('Mål', data.target_env)}
+            ${renderTransportValue('Exporterade objekt', data.exported_count)}
+            ${renderTransportValue('Fel', data.error_count)}
+            ${renderTransportValue('DEF-fil', data.definition_file)}
+            ${renderTransportValue('RDA-miljö', ctx.target_env || rda.target_env || '')}
+            ${renderTransportValue('RDA Package ID', rda.package_instance_id || '')}
+            ${renderTransportValue('RDA Package entry', rda.package_entry_id || '')}
+            ${renderTransportValue('Definition attachment', rda.attachment_uploaded ? 'Uppladdad' : 'Ej bekräftad')}
+          </div>
+          <p><a class="button-link" href="${transportEscape(data.download_url)}">Ladda ner DEF-fil</a></p>
+          <div class="table-wrap transport-plan-table"><table><thead><tr><th>Typ</th><th>Objekt</th><th>Version</th><th>Modifierad</th><th>Bytes</th></tr></thead><tbody>${rows}</tbody></table></div>
+          ${dataEntries}
+          ${uploadErrors}
+          ${errors}
+        </div>`;
+      } catch (err) {
+        transportResult.innerHTML = `<div class="error">${transportEscape(err)}</div>`;
+      }
+    }
+
+    document.querySelector('[data-transport-deploy]')?.addEventListener('click', postTransportDeploy);
+    renderTransportBasket();
+    updateSelectedTransportCount();
   </script>
 
 </body>

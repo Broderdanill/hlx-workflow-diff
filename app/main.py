@@ -7,10 +7,14 @@ import fnmatch
 import os
 import sys
 import time
+import re
+import uuid
+import zipfile
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -34,7 +38,7 @@ def configure_logging() -> None:
 configure_logging()
 log = logging.getLogger("hlx.workflow_diff")
 
-app = FastAPI(title="Helix Workflow Diff", version="1.6.0")
+app = FastAPI(title="Helix Workflow Diff", version="1.6.2")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 
@@ -58,6 +62,569 @@ GUIDE_FORM_SCOPED_TYPES = {"active_link_guide", "filter_guide"}
 # form-prefix scope, so they are always cached even when cache_scope is active.
 GLOBAL_ALWAYS_CACHE_TYPES = {"application", "packing_list", "web_service", "menu", "image", "view"}
 FORM_SCOPE_SUPPORTED_TYPES = {"form"} | WORKFLOW_FORM_SCOPED_TYPES | GUIDE_FORM_SCOPED_TYPES | GLOBAL_ALWAYS_CACHE_TYPES
+
+
+VERSION_CONTROL_OBJECT_MODIFICATION_LOG = "AR System Version Control: Object Modification Log"
+VERSION_CONTROL_ATTACHMENT_FIELDS = [
+    # In AR System Version Control: Object Modification Log the attachment field
+    # is named "object definition" (field id 2828) and belongs to attachment
+    # pool 2827. Older code used the display label "object definition attachment",
+    # which is not a real field name and therefore got stripped by the defensive
+    # missing-field retry.
+    "object definition",
+    "2828",
+]
+
+VERSION_CONTROL_FIELDS = [
+    "Request ID",
+    "Record ID",
+    "Object Type",
+    "Object Name",
+    "Operation",
+    "Label",
+    "Modified Date",
+    "Create Date",
+    "User",
+    "Version ID",
+    "Latest Ver",
+    "Resolved Name",
+    "Comments",
+    "API Target",
+    "API ID",
+    "Task ID",
+    "object definition",
+]
+
+
+def _ar_quote_text(value: Any) -> str:
+    return '"' + str(value).replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def _entry_values(row: dict[str, Any]) -> dict[str, Any]:
+    return row.get("values", row) or {}
+
+
+def _sort_key_for_version_log(row: dict[str, Any]) -> tuple[str, str, str]:
+    values = _entry_values(row)
+    return (
+        str(values.get("Modified Date") or ""),
+        str(values.get("Create Date") or ""),
+        str(values.get("Request ID") or values.get("Record ID") or ""),
+    )
+
+
+def _first_present(values: dict[str, Any], names: list[str]) -> Any:
+    for name in names:
+        if name in values and values.get(name) not in (None, ""):
+            return values.get(name)
+    return None
+
+
+def _compact_attachment(value: Any) -> Any:
+    if not value:
+        return None
+    if isinstance(value, dict):
+        keep = {k: value.get(k) for k in ("name", "filename", "sizeBytes", "size", "contentType", "href") if k in value}
+        return keep or value
+    if isinstance(value, list):
+        return [_compact_attachment(v) for v in value]
+    return value
+
+
+def _version_log_preview_payload(row: dict[str, Any]) -> dict[str, Any]:
+    values = _entry_values(row)
+    return {
+        "request_id": values.get("Request ID"),
+        "record_id": values.get("Record ID"),
+        "object_type": values.get("Object Type"),
+        "object_name": values.get("Object Name"),
+        "operation": values.get("Operation"),
+        "label": values.get("Label"),
+        "modified_date": values.get("Modified Date"),
+        "create_date": values.get("Create Date"),
+        "user": values.get("User"),
+        "version_id": values.get("Version ID"),
+        "latest_version": values.get("Latest Ver"),
+        "resolved_name": values.get("Resolved Name"),
+        "api_target": values.get("API Target"),
+        "api_id": values.get("API ID"),
+        "task_id": values.get("Task ID"),
+        "comments": values.get("Comments"),
+        "definition_attachment": _compact_attachment(_first_present(values, VERSION_CONTROL_ATTACHMENT_FIELDS + ["object definition attachment"])),
+        "raw_keys": sorted(values.keys()),
+    }
+
+
+async def fetch_latest_object_modification(env: Environment, object_name: str) -> dict[str, Any]:
+    q = f"'Object Name' = {_ar_quote_text(object_name)}"
+    async with HelixClient(env) as client:
+        rows = await client.fetch_form_entries(VERSION_CONTROL_OBJECT_MODIFICATION_LOG, VERSION_CONTROL_FIELDS, q=q, limit=1000)
+    if not rows:
+        return {"found": False, "query": q, "form": VERSION_CONTROL_OBJECT_MODIFICATION_LOG}
+    rows = sorted(rows, key=_sort_key_for_version_log, reverse=True)
+    latest = _version_log_preview_payload(rows[0])
+    return {
+        "found": True,
+        "query": q,
+        "form": VERSION_CONTROL_OBJECT_MODIFICATION_LOG,
+        "count": len(rows),
+        "latest": latest,
+        "recent": [_version_log_preview_payload(r) for r in rows[:5]],
+    }
+
+
+
+
+
+def _safe_filename_part(value: Any) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"[^A-Za-z0-9_.:-]+", "_", text)
+    return text.strip("._-") or "object"
+
+
+def _transport_dir() -> Path:
+    path = Path(os.getenv("HELIX_TRANSPORT_DIR") or os.path.join(os.getenv("HELIX_CACHE_DIR", "/data/cache"), "transport"))
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _attachment_filename(value: Any, fallback: str = "object.def") -> str:
+    if isinstance(value, list) and value:
+        return _attachment_filename(value[0], fallback=fallback)
+    if isinstance(value, dict):
+        for key in ("name", "filename", "fileName"):
+            if value.get(key):
+                return str(value[key])
+    return fallback
+
+
+async def fetch_latest_object_definition(env: Environment, object_name: str) -> dict[str, Any]:
+    """Fetch latest Object Modification Log row and its definition attachment.
+
+    This is the first real transport step: export definitions from source into a
+    DEF candidate file. It deliberately does not import to the target.
+    """
+    q = f"'Object Name' = {_ar_quote_text(object_name)}"
+    async with HelixClient(env) as client:
+        rows = await client.fetch_form_entries(VERSION_CONTROL_OBJECT_MODIFICATION_LOG, VERSION_CONTROL_FIELDS, q=q, limit=1000)
+        if not rows:
+            return {"found": False, "query": q, "form": VERSION_CONTROL_OBJECT_MODIFICATION_LOG}
+        rows = sorted(rows, key=_sort_key_for_version_log, reverse=True)
+        row = rows[0]
+        values = _entry_values(row)
+        preview = _version_log_preview_payload(row)
+        entry_id = values.get("Request ID") or values.get("Record ID") or row.get("id")
+        attachment = _first_present(values, VERSION_CONTROL_ATTACHMENT_FIELDS + ["object definition attachment"])
+        if not entry_id:
+            raise HelixError(f"Object Modification Log för {object_name} saknar Request ID/Record ID.")
+        # Some servers do not include attachment metadata in values(), even when
+        # the field exists. Try the documented attachment endpoint anyway using
+        # the real field name and the field id.
+        last_attachment_error = None
+        for field_name in VERSION_CONTROL_ATTACHMENT_FIELDS:
+            try:
+                content = await client.fetch_attachment(VERSION_CONTROL_OBJECT_MODIFICATION_LOG, str(entry_id), field_name, attachment)
+                break
+            except Exception as exc:
+                last_attachment_error = exc
+                content = b""
+        else:
+            if not attachment:
+                return {"found": True, "latest": preview, "definition_found": False, "error": f"Senaste version saknar object definition attachment/field metadata och endpoint kunde inte läsa attachment: {last_attachment_error}"}
+            raise HelixError(f"Kunde inte läsa object definition attachment för {object_name}: {last_attachment_error}")
+    return {
+        "found": True,
+        "definition_found": True,
+        "latest": preview,
+        "filename": _attachment_filename(attachment, fallback=f"{_safe_filename_part(object_name)}.def"),
+        "content": content,
+        "content_size": len(content),
+    }
+
+
+
+
+def _def_ref_type(object_type: str, object_label: str = "") -> int:
+    """Best-effort AR packing-list reference type.
+
+    DEF packing lists are containers where references point to the included
+    object definitions. The important part for RDA/manual import is that the
+    objects themselves are present in the DEF. The generated packing list helps
+    Deployment Console/AR import treat the transport as one named package.
+    """
+    key = f"{object_type} {object_label}".lower()
+    if any(x in key for x in ("form", "schema")):
+        return 2
+    if "filter" in key and "guide" not in key:
+        return 3
+    if "active" in key and "link" in key and "guide" not in key:
+        return 1
+    if "escal" in key:
+        return 6
+    if "menu" in key:
+        return 4
+    if "image" in key:
+        return 9
+    if "container" in key or "guide" in key or "packing" in key:
+        return 7
+    return 2
+
+
+def _packing_list_def_block(package_name: str, exported: list[dict[str, Any]]) -> bytes:
+    """Generate a DEF packing-list container for the selected objects.
+
+    BMC exports a packing list as a container with type 3 and reference rows.
+    We append this after the exported object definitions so the DEF also creates
+    a packing list object on import, similar to a manually exported packing list.
+    """
+    now_ts = int(time.time())
+    safe_name = package_name[:254]
+    lines = [
+        "",
+        "begin container",
+        f"   name           : {safe_name}",
+        "   type           : 3",
+        f"   num-references : {len(exported)}",
+        f"   timestamp      : {now_ts}",
+        "   owner          : Demo",
+        "   last-changed   : Demo",
+        "   export-version : 12",
+        f"   label          : {safe_name}",
+        "   description    : Created by HLX Workflow Diff transport",
+        "   object-prop    : 2\\90015\\2\\4\\90016\\4\\1\\1\\",
+    ]
+    for item in exported:
+        obj_name = str(item.get("object_name") or "").strip()
+        if not obj_name:
+            continue
+        ref_type = _def_ref_type(str(item.get("object_type") or ""), str(item.get("object_label") or ""))
+        lines.extend([
+            "reference {",
+            f"   type           : {ref_type}",
+            "   datatype       : 0",
+            f"   object         : {obj_name}",
+            "}",
+        ])
+    lines.append("end")
+    lines.append("")
+    return ("\n".join(lines)).encode("utf-8")
+
+
+def _make_transport_zip(def_path: Path) -> Path:
+    zip_path = def_path.with_suffix(".zip")
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.write(def_path, arcname=def_path.name)
+    return zip_path
+
+async def create_transport_def_candidate(source_env: Environment, target_env: Environment, items: list[dict[str, Any]]) -> dict[str, Any]:
+    exported: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    parts: list[bytes] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in items:
+        object_name = str(raw.get("object_name") or raw.get("name") or "").strip()
+        object_type = str(raw.get("object_type") or "").strip()
+        object_label = str(raw.get("object_label") or object_type or "Objekt").strip()
+        if not object_name:
+            continue
+        key = (object_type, object_name.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            definition = await fetch_latest_object_definition(source_env, object_name)
+            if not definition.get("found"):
+                errors.append({"object_type": object_type, "object_label": object_label, "object_name": object_name, "error": "Saknar Object Modification Log."})
+                continue
+            if not definition.get("definition_found"):
+                errors.append({"object_type": object_type, "object_label": object_label, "object_name": object_name, "error": definition.get("error") or "Saknar definition attachment."})
+                continue
+            content = definition.get("content") or b""
+            if not isinstance(content, (bytes, bytearray)) or not content:
+                errors.append({"object_type": object_type, "object_label": object_label, "object_name": object_name, "error": "Definition attachment är tom."})
+                continue
+            if parts:
+                parts.append(b"\n\n")
+            parts.append(bytes(content))
+            latest = definition.get("latest") or {}
+            exported.append({
+                "object_type": object_type,
+                "object_label": object_label,
+                "object_name": object_name,
+                "source_attachment": definition.get("filename"),
+                "bytes": len(content),
+                "version_id": latest.get("version_id"),
+                "operation": latest.get("operation"),
+                "modified_date": latest.get("modified_date"),
+                "user": latest.get("user"),
+            })
+        except Exception as exc:
+            errors.append({"object_type": object_type, "object_label": object_label, "object_name": object_name, "error": str(exc)})
+    if not exported:
+        return {
+            "source_env": source_env.name,
+            "target_env": target_env.name,
+            "created": False,
+            "exported_count": 0,
+            "error_count": len(errors),
+            "errors": errors,
+            "error": "Ingen DEF-fil skapades eftersom inga objekt kunde exporteras.",
+        }
+    created_stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    transport_name = f"HLX Workflow Diff {source_env.name}->{target_env.name} {created_stamp}"
+    filename = f"hlx-transport-{_safe_filename_part(source_env.name)}-to-{_safe_filename_part(target_env.name)}-{created_stamp}.def"
+    out = _transport_dir() / filename
+    parts.append(_packing_list_def_block(transport_name, exported))
+    out.write_bytes(b"".join(parts))
+    zip_path = _make_transport_zip(out)
+    manifest_path = out.with_suffix(".json")
+    manifest = {
+        "manifest_type": "hlx-workflow-diff-def-export",
+        "created_at": now_iso(),
+        "source_env": source_env.name,
+        "target_env": target_env.name,
+        "definition_file": filename,
+        "zip_file": zip_path.name,
+        "transport_name": transport_name,
+        "exported": exported,
+        "errors": errors,
+        "warning": "DEF-filen är skapad från Object Modification Log på källmiljön. Ingen import till målmiljön har utförts ännu.",
+    }
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    return {
+        "source_env": source_env.name,
+        "target_env": target_env.name,
+        "created": True,
+        "definition_file": filename,
+        "download_url": f"/api/transport/download/{filename}",
+        "zip_file": zip_path.name,
+        "zip_download_url": f"/api/transport/download/{zip_path.name}",
+        "transport_name": transport_name,
+        "manifest_file": manifest_path.name,
+        "exported_count": len(exported),
+        "error_count": len(errors),
+        "exported": exported,
+        "errors": errors,
+        "next_step": "DEF-fil skapad lokalt. RDA-paketet skapas på källmiljön så Deployment Console kan bygga ett riktigt paket för transfer/import till målmiljön.",
+    }
+
+
+
+
+def _rda_draft_dir() -> Path:
+    path = _transport_dir() / "rda-drafts"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _rda_package_name(source_env: Environment, target_env: Environment) -> str:
+    return f"HLX Workflow Diff {source_env.name}->{target_env.name} {time.strftime('%Y%m%d-%H%M%S', time.gmtime())}"
+
+
+async def create_rda_deployment_draft(target_env: Environment, source_env: Environment, def_result: dict[str, Any]) -> dict[str, Any]:
+    """Create a manual-inspection RDA package draft on the target environment from the generated DEF file.
+
+    This is intentionally *not* package execution. It creates records that should
+    be visible in/around the Deployment Management Console so an administrator can
+    inspect the imported definition candidate before any future automated deploy
+    step is enabled.
+    """
+    if not def_result.get("created"):
+        return {"created": False, "error": "DEF-filen skapades inte, därför skapades inget RDA-utkast."}
+    definition_file = str(def_result.get("definition_file") or "")
+    definition_path = _transport_dir() / os.path.basename(definition_file)
+    if not definition_file or not definition_path.exists():
+        return {"created": False, "error": "DEF-filen saknas på servern."}
+    content = definition_path.read_bytes()
+    zip_file = str(def_result.get("zip_file") or "")
+    zip_path = _transport_dir() / os.path.basename(zip_file) if zip_file else _make_transport_zip(definition_path)
+    zip_file = zip_path.name
+    zip_content = zip_path.read_bytes()
+    package_instance_id = str(uuid.uuid4())
+    data_instance_id = str(uuid.uuid4())
+    package_name = str(def_result.get("transport_name") or _rda_package_name(source_env, target_env))
+    package_version = time.strftime("%Y%m%d%H%M%S", time.gmtime())
+    details = (
+        f"Skapad av HLX Workflow Diff {now_iso()}\n"
+        f"Källa: {source_env.name}\n"
+        f"Mål: {target_env.name}\n"
+        f"Objekt: {def_result.get('exported_count', 0)}\n"
+        "Detta är ett RDA-utkast för manuell granskning. Ingen deploy är startad."
+    )
+    async with HelixClient(target_env) as client:
+        package_values = {
+            "InstanceID": package_instance_id,
+            "Short Description": package_name,
+            "PackageName": package_name,
+            "PackageVersion": package_version,
+            "Package Version": 1,
+            "Package Details": details,
+            # Keep it as a package prepared for Deployment Console inspection.
+            # The exact RDA state enum differs between releases; unknown fields
+            # are removed by create_form_entry, but these match exported RDA rows.
+            "State": 0,
+            "Rollback Enable": 0,
+            "SkipRollbackValidation": 0,
+            "cb_stopOnError": 1,
+            "cb_RollBackSingleError": 0,
+            "ownerServer": target_env.base_url,
+            "ZipFileName": zip_file,
+            "z1D_Action": "CREATE",
+        }
+        package_create = await client.create_form_entry("RDA:DeploymentPackageDetails", package_values)
+        # Use "Add AR Definition" rather than "Add Packing List".
+        #
+        # "Add Packing List" makes ARMigrate call ARGetContainer(name) during
+        # Build. That requires a real AR container/packing-list object to exist
+        # on the server, and REST writes to AR System Metadata: arcontainer are
+        # blocked by AR System (ARERR 9720).
+        #
+        # For this app we already build a complete DEF file from Object
+        # Modification Log attachments and upload it to Definition_File, so the
+        # correct RDA content operation is Add AR Definition (TYPE=15). That lets
+        # the Deployment Console build/import the supplied definition file
+        # without trying to export a server-side packing-list container first.
+        data_values = {
+            "InstanceID": data_instance_id,
+            "Short Description": f"AR definition: {definition_file}",
+            "PackageInstanceID": package_instance_id,
+            "z1D_PackageName": package_name,
+            "z1D_PackageVersion": package_version,
+            "ContentName": definition_file,
+            "ObjectName": definition_file,
+            "Application_Object_Type": "AR Definition",
+            "Application_Object_Name": definition_file,
+            "Content SubType": "AR Definition",
+            # RDA:DeploymentDataDetails enum id from the RDA form definition:
+            # TYPE=15 -> Add AR Definition. Do not set Packing List Name or
+            # TypeOfObject=Container here, otherwise ARMigrate tries to resolve
+            # a real packing-list container by name and fails with ARERR 8804.
+            "TYPE": 15,
+            "Include_Object_PL": 2,
+            "Import Option": 0,
+            "SequenceNumber": 1,
+            "OriginalSequence": 1,
+            # Attachment fields must NOT be sent as JSON values. AR REST expects
+            # attachment fields to be populated via multipart/form-data using
+            # part names like attach-Definition_File after the entry exists.
+            # Sending the file name as JSON gives ARERR 310: wrong data type.
+            "z1D_Action": "CREATE",
+        }
+        data_create = await client.create_form_entry("RDA:DeploymentDataDetails", data_values)
+        package_entry = package_create.get("entry_id") or package_create.get("response", {}).get("entryId") or package_create.get("response", {}).get("id")
+        data_entry = data_create.get("entry_id") or data_create.get("response", {}).get("entryId") or data_create.get("response", {}).get("id")
+        upload_results: list[dict[str, Any]] = []
+        upload_errors: list[str] = []
+        if package_entry:
+            for field in ("z2AF_File1", "304250810"):
+                try:
+                    uploaded = await client.upload_entry_attachment("RDA:DeploymentPackageDetails", str(package_entry), field, zip_file, zip_content)
+                    upload_results.append({"form": "RDA:DeploymentPackageDetails", "field": field, **uploaded})
+                    break
+                except Exception as exc:
+                    upload_errors.append(f"package {field}: {exc}")
+        else:
+            upload_errors.append("RDA:DeploymentPackageDetails skapades men inget entry id returnerades, package ZIP kunde inte laddas upp.")
+        if data_entry:
+            # Definition_File is the real attachment field on RDA:DeploymentDataDetails
+            # (field id 304416544). Some AR REST versions prefer the display name,
+            # some the numeric field id, so upload_entry_attachment tries both part
+            # naming forms internally. Static_Definition_File is a fallback only.
+            for field in ("Definition_File", "304416544", "Static_Definition_File", "304416546"):
+                try:
+                    uploaded = await client.upload_entry_attachment("RDA:DeploymentDataDetails", str(data_entry), field, definition_file, content)
+                    upload_results.append({"field": field, **uploaded})
+                    # one successful attachment is enough; keep remaining fields untouched.
+                    break
+                except Exception as exc:
+                    upload_errors.append(f"{field}: {exc}")
+        else:
+            upload_errors.append("RDA:DeploymentDataDetails skapades men inget entry id returnerades, attachment kunde inte laddas upp.")
+    draft_manifest = {
+        "manifest_type": "hlx-workflow-diff-rda-draft",
+        "created_at": now_iso(),
+        "source_env": source_env.name,
+        "target_env": target_env.name,
+        "package_name": package_name,
+        "package_instance_id": package_instance_id,
+        "data_instance_id": data_instance_id,
+        "package_entry_id": package_entry,
+        "data_entry_id": data_entry,
+        "definition_file": definition_file,
+        "zip_file": zip_file,
+        "upload_results": upload_results,
+        "upload_errors": upload_errors,
+        "exported": def_result.get("exported", []),
+        "warning": "RDA-utkast skapat. Ingen deployment har startats automatiskt.",
+    }
+    manifest_name = f"rda-draft-{_safe_filename_part(source_env.name)}-to-{_safe_filename_part(target_env.name)}-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}.json"
+    (_rda_draft_dir() / manifest_name).write_text(json.dumps(draft_manifest, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    return {
+        "created": True,
+        "package_name": package_name,
+        "package_instance_id": package_instance_id,
+        "package_entry_id": package_entry,
+        "data_entry_id": data_entry,
+        "definition_file": definition_file,
+        "attachment_uploaded": bool(upload_results),
+        "upload_errors": upload_errors,
+        "manifest_file": manifest_name,
+        "next_step": "Öppna Deployment Management Console i målmiljön och kontrollera RDA-utkastet. Ingen deploy har startats automatiskt.",
+    }
+
+
+async def build_transport_plan(source_env: Environment, target_env: Environment | None, items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Read-only migration basket validation.
+
+    The plan intentionally does not write to the target environment. It only
+    verifies that each selected object has a recent Object Modification Log
+    entry on the source, so the next step can become RDA/Deployment Console
+    package creation.
+    """
+    planned: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in items:
+        object_name = str(raw.get("object_name") or raw.get("name") or "").strip()
+        object_type = str(raw.get("object_type") or "").strip()
+        object_label = str(raw.get("object_label") or object_type or "Objekt").strip()
+        if not object_name:
+            continue
+        key = (object_type, object_name.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            vc = await fetch_latest_object_modification(source_env, object_name)
+        except HelixError as exc:
+            errors.append({"object_type": object_type, "object_label": object_label, "object_name": object_name, "error": str(exc)})
+            continue
+        latest = vc.get("latest") or {}
+        planned.append({
+            "object_type": object_type,
+            "object_label": object_label,
+            "object_name": object_name,
+            "status": "ready" if vc.get("found") else "missing_version_log",
+            "version_control": vc,
+            "latest_operation": latest.get("operation"),
+            "version_id": latest.get("version_id"),
+            "latest_version": latest.get("latest_version"),
+            "modified_date": latest.get("modified_date"),
+            "user": latest.get("user"),
+            "has_definition_attachment": bool(latest.get("definition_attachment")),
+        })
+    return {
+        "source_env": source_env.name,
+        "target_env": target_env.name if target_env else None,
+        "deployment_mode": "read-only-transport-plan",
+        "item_count": len(planned),
+        "ready_count": sum(1 for item in planned if item.get("status") == "ready"),
+        "missing_version_log_count": sum(1 for item in planned if item.get("status") == "missing_version_log"),
+        "error_count": len(errors),
+        "items": planned,
+        "errors": errors,
+        "next_step": "Skapa RDA/Deployment Console package av dessa objekt. Ingen deploy eller import utförs i detta steg.",
+    }
 
 
 def _scope_patterns() -> tuple[list[str], list[str], str]:
@@ -1172,6 +1739,152 @@ async def api_sync(payload: dict):
     result = await sync_environments(envs, object_types, deep=True, mode=payload.get("mode", "incremental"), source="api")
     return JSONResponse(result)
 
+
+@app.post("/api/transport/preview")
+async def api_transport_preview(payload: dict):
+    """Read-only preview for a future Deployment Console transport flow.
+
+    This does not import or write anything. It only looks up the latest version
+    control entry on the source environment so the user can verify exactly what
+    object definition would be considered for a future RDA/deployment package.
+    """
+    config_envs, types = load_config()
+    by_name = {e.name: e for e in config_envs}
+    source_name = payload.get("source_env")
+    target_name = payload.get("target_env")
+    object_name = str(payload.get("object_name") or "").strip()
+    object_type_key = payload.get("object_type") or ""
+
+    if not source_name or source_name not in by_name:
+        return JSONResponse({"error": "Välj en giltig källmiljö."}, status_code=400)
+    if target_name and target_name not in by_name:
+        return JSONResponse({"error": "Vald målmiljö finns inte i konfigurationen."}, status_code=400)
+    if not object_name:
+        return JSONResponse({"error": "Ange objektnamn."}, status_code=400)
+
+    try:
+        preview = await fetch_latest_object_modification(by_name[source_name], object_name)
+    except HelixError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+    object_type = types.get(object_type_key)
+    return JSONResponse({
+        "source_env": source_name,
+        "target_env": target_name,
+        "object_type": object_type.label if object_type else object_type_key,
+        "object_name": object_name,
+        "deployment_mode": "preview-only",
+        "next_step": "Skapa ett RDA/deployment package via Deployment Console API/former. Ingen import görs av detta verktyg ännu.",
+        "version_control": preview,
+    })
+
+
+@app.post("/api/transport/validate-list")
+async def api_transport_validate_list(payload: dict):
+    config_envs, _types = load_config()
+    by_name = {e.name: e for e in config_envs}
+    source_name = payload.get("source_env")
+    target_name = payload.get("target_env")
+    items = payload.get("items") or []
+    if not source_name or source_name not in by_name:
+        return JSONResponse({"error": "Välj en giltig källmiljö."}, status_code=400)
+    if target_name and target_name not in by_name:
+        return JSONResponse({"error": "Vald målmiljö finns inte i konfigurationen."}, status_code=400)
+    if not isinstance(items, list) or not items:
+        return JSONResponse({"error": "Migreringslistan är tom."}, status_code=400)
+    plan = await build_transport_plan(by_name[source_name], by_name.get(target_name), items)
+    return JSONResponse(plan)
+
+
+@app.post("/api/transport/prepare")
+async def api_transport_prepare(payload: dict):
+    """Prepare a read-only manifest for a future RDA deployment package.
+
+    This endpoint deliberately does not write to either environment. It returns
+    a deterministic manifest that can later be used as input when proper
+    Deployment Console/RDA package creation is implemented.
+    """
+    config_envs, _types = load_config()
+    by_name = {e.name: e for e in config_envs}
+    source_name = payload.get("source_env")
+    target_name = payload.get("target_env")
+    items = payload.get("items") or []
+    if not source_name or source_name not in by_name:
+        return JSONResponse({"error": "Välj en giltig källmiljö."}, status_code=400)
+    if not target_name or target_name not in by_name:
+        return JSONResponse({"error": "Välj en giltig målmiljö."}, status_code=400)
+    if not isinstance(items, list) or not items:
+        return JSONResponse({"error": "Migreringslistan är tom."}, status_code=400)
+    plan = await build_transport_plan(by_name[source_name], by_name[target_name], items)
+    manifest = {
+        "manifest_type": "hlx-workflow-diff-rda-candidate",
+        "created_at": now_iso(),
+        "source_env": source_name,
+        "target_env": target_name,
+        "deployment_mode": "prepare-only",
+        "warning": "Detta är endast en kandidatlista. Ingen RDA package creation eller deploy har utförts.",
+        "items": [
+            {
+                "object_type": item.get("object_type"),
+                "object_label": item.get("object_label"),
+                "object_name": item.get("object_name"),
+                "version_id": item.get("version_id"),
+                "latest_version": item.get("latest_version"),
+                "operation": item.get("latest_operation"),
+                "modified_date": item.get("modified_date"),
+                "has_definition_attachment": item.get("has_definition_attachment"),
+            }
+            for item in plan.get("items", [])
+        ],
+    }
+    plan["manifest"] = manifest
+    plan["next_step"] = "Nästa implementation bör skapa ett riktigt paket i BMC Deployment Console/RDA, därefter separat bekräfta deploy."
+    return JSONResponse(plan)
+
+
+
+@app.post("/api/transport/deploy")
+async def api_transport_deploy(payload: dict):
+    """Create a DEF export from selected source objects.
+
+    This is intentionally the first deploy step only: it fetches the latest
+    object definition attachments from Object Modification Log and writes a DEF
+    file on the server for download. It does not import anything to the target
+    environment yet.
+    """
+    config_envs, _types = load_config()
+    by_name = {e.name: e for e in config_envs}
+    source_name = payload.get("source_env")
+    target_name = payload.get("target_env")
+    items = payload.get("items") or []
+    if not source_name or source_name not in by_name:
+        return JSONResponse({"error": "Välj en giltig källmiljö."}, status_code=400)
+    if not target_name or target_name not in by_name:
+        return JSONResponse({"error": "Välj en giltig målmiljö."}, status_code=400)
+    if source_name == target_name:
+        return JSONResponse({"error": "Käll- och målmiljö får inte vara samma vid deploy/export."}, status_code=400)
+    if not isinstance(items, list) or not items:
+        return JSONResponse({"error": "Migreringslistan är tom."}, status_code=400)
+    result = await create_transport_def_candidate(by_name[source_name], by_name[target_name], items)
+    if result.get("created") and payload.get("create_rda_draft", True):
+        try:
+            result["rda_draft"] = await create_rda_deployment_draft(by_name[target_name], by_name[source_name], result)
+            result["next_step"] = result["rda_draft"].get("next_step") or result.get("next_step")
+        except Exception as exc:
+            log.exception("RDA target draft creation failed target=%s source=%s", target_name, source_name)
+            result["rda_draft"] = {"created": False, "error": str(exc)}
+            result["next_step"] = "DEF-fil skapades, men RDA-utkast i målmiljön kunde inte skapas. Kontrollera felmeddelandet och ladda eventuellt ner DEF-filen manuellt."
+    status = 200 if result.get("created") else 400
+    return JSONResponse(result, status_code=status)
+
+
+@app.get("/api/transport/download/{filename}")
+async def api_transport_download(filename: str):
+    safe = os.path.basename(filename)
+    path = _transport_dir() / safe
+    if not path.exists() or not path.is_file():
+        return JSONResponse({"error": "Filen finns inte."}, status_code=404)
+    return FileResponse(path, media_type="application/octet-stream", filename=safe)
 
 @app.get("/api/cache/status")
 async def api_cache_status():

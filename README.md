@@ -357,3 +357,95 @@ Denna version breddar den djupa cachen för att ligga närmare BMC Migrator: fle
 - Views är inte längre en separat objektkategori i GUI:t/resultatet. Vyer behandlas som formulärmetadata under Forms tillsammans med VUI, view mapping och layout/display metadata.
 - Ignore metadata-listan är utökad så valen bättre speglar den metadata som faktiskt cacheas in: miljöspecifika ID:n, fältdefinitioner, fältlayout, VUI/views, schema metadata, workflow-villkor/actions, guider, menyer och images.
 - Cache-scope är bumpad så cache byggs om en gång efter uppgraderingen.
+
+## Transportförhandsgranskning
+
+Från v28.20 finns ett första, read-only steg för framtida transport/deploy.
+Funktionen läser senaste post i `AR System Version Control: Object Modification Log` på källmiljön för valt objektnamn och visar versions-/attachmentinformation. Den skriver inte metadata till målmiljön och kör ingen import.
+
+Tanken framåt är att nästa steg ska använda BMC Deployment Console/RDA-flödet för att skapa/validera ett deployment package, inte skriva direkt till `AR System Metadata:*`.
+
+## v28.21
+
+- Diffresultatet kan nu användas som källa för en migreringslista.
+- Objekt som skiljer eller saknas kan läggas till i listan direkt från resultatraderna.
+- Migreringslistan sparas lokalt i browsern med `localStorage`.
+- `Validera lista` läser senaste post från `AR System Version Control: Object Modification Log` för varje valt objekt.
+- `Förbered kandidat` skapar ett read-only manifest för framtida RDA/Deployment Console-flöde.
+- Ingen deploy, import eller skrivning till målmiljö görs ännu.
+
+
+### v28.22
+
+- Migreringslistan kan nu fyllas från alla objekt i diffresultatet, även objekt som redan är lika. Det gör att man kan återmigrera eller tvinga ut en känd version via kommande RDA/Deployment Console-flöde.
+
+
+## Transport / DEF-export
+
+Transportpanelen kan lägga valda objekt från diffresultatet i en migreringslista.
+Knappen **Deploy / skapa DEF-fil** hämtar senaste objektdefinition från `AR System Version Control: Object Modification Log` i källmiljön och skapar en nedladdningsbar `.def`-fil i `/data/cache/transport`.
+
+Detta steg importerar inte till målmiljön och skriver inte till metadata-formulär. DEF-filen ska verifieras innan nästa steg mot BMC Deployment Console/RDA byggs på.
+
+## v28.25
+
+- Fixar DEF-export från `AR System Version Control: Object Modification Log`.
+- Attachmentfältet heter `object definition` i formuläret, med field id `2828`; tidigare användes fel namn `object definition attachment`.
+- Exporten försöker nu hämta attachment via både fältnamn och field id och kombinerar alla exporterade definitioner till en DEF-fil.
+
+## v28.26
+
+- Transportens Deploy-knapp skapar nu först en kombinerad DEF-fil och försöker därefter skapa ett RDA/Deployment Console-utkast i målmiljön.
+- Utkastet skapas som poster i `RDA:DeploymentPackageDetails` och `RDA:DeploymentDataDetails` med DEF-filen som attachment på data-posten.
+- Ingen faktisk deployment startas automatiskt ännu. Öppna Deployment Management Console i målmiljön och kontrollera paketet manuellt.
+- Om attachment-upload varierar mellan Helix-versioner skapas DEF-filen fortfarande för nedladdning och UI visar upload-varningar.
+
+
+### v28.27
+
+- RDA-utkast skapar inte längre attachmentfält som JSON-värden.
+- `RDA:DeploymentDataDetails.Definition_File` laddas upp via AR REST multipart (`attach-Definition_File`) efter att dataposten skapats.
+- Detta följer AR REST-modellen för attachmentfält: JSON för vanliga fält, multipart för bilagor.
+
+
+## v28.28
+
+- Transport-DEF innehåller nu även en genererad packing list-container (`begin container`, `type: 3`) som refererar till de valda objekten.
+- Transporten skapar även en ZIP med DEF-filen.
+- RDA-utkastet laddar upp ZIP-filen på `RDA:DeploymentPackageDetails` (`z2AF_File1`) och DEF-filen på `RDA:DeploymentDataDetails` (`Definition_File`).
+- Detta ska göra paketet mer likt hur RDA/Deployment Console förväntar sig ett paket, men deploy startas fortfarande inte automatiskt.
+
+## v28.29
+
+- RDA-content raden skapas nu som **Add Packing List** i stället för en generisk definition-file-rad.
+- `RDA:DeploymentDataDetails.Packing List Name` fylls med samma namn som den genererade packing list-containern i DEF-filen.
+- `TYPE=10` och `TypeOfObject=12` sätts enligt RDA-formens definition: Add Packing List / Container.
+- Detta åtgärdar build-felet `ARMigratePlugin: Packing list name is empty`.
+
+## v28.31
+
+- Transport/RDA: använder nu `Add AR Definition` (`TYPE=15`) för `RDA:DeploymentDataDetails` i stället för `Add Packing List`.
+- Orsak: `Add Packing List` gör att ARMigrate försöker läsa en befintlig AR-container/packing list via `ARGetContainer(name)`. REST-skrivning direkt mot `AR System Metadata: arcontainer` blockeras av AR System (`ARERR 9720`), vilket leder till `ARERR 8804` vid Build.
+- DEF-filen skapas fortfarande från Object Modification Log och laddas upp som riktig attachment i `Definition_File`.
+
+## v28.33
+
+- Ändrar RDA-flödet så Deployment Console-paket skapas på källmiljön i stället för målmiljön.
+- Skapar en RDA-contentrad per valt objekt som `Add AR Definition` med `TypeOfObject` och `ObjectName`, så Build exporterar objekten från källmiljön.
+- Slutar använda uppladdad DEF som RDA Build-input; DEF-filen finns kvar som lokal nedladdning/audit.
+- Detta bör undvika att Build fastnar när paketet skapats på fel miljö eller saknar riktiga AR-definitionobjekt.
+
+
+## v28.33
+
+- UI visar nu tydligt att RDA-paketet skapas på källmiljön, inte målmiljön.
+- Tog bort missvisande attachment-varning från RDA-flödet när Add AR Definition används.
+- Resultatet visar antal skapade contentrader och entry-id per objekt.
+
+## v28.34
+
+- Återställer transportflödet till det avsedda arbetssättet: objektdefinitioner hämtas från `AR System Version Control: Object Modification Log` i källmiljön, kombineras till en `.def`-fil och laddas upp till RDA/Deployment Console i målmiljön.
+- RDA-paketet skapas åter i målmiljön, inte i källmiljön.
+- `RDA:DeploymentDataDetails` skapas som `Add AR Definition` (`TYPE=15`) och DEF-filen laddas upp som `Definition_File` attachment via multipart.
+- `Add Packing List` och försök att skapa `AR System Metadata: arcontainer` används inte, eftersom REST-skrivning till metadata-containern blockeras av AR System och RDA annars försöker exportera en packing list som inte finns.
+- GUI-texten är justerad så den tydligt beskriver att paketet skapas i målmiljön och att manuell kontroll/build/deploy görs där.

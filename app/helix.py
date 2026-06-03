@@ -7,6 +7,7 @@ import logging
 import re
 import time
 import os
+from urllib.parse import quote
 from collections import defaultdict
 from typing import Any
 
@@ -152,6 +153,130 @@ class HelixClient:
             continue
 
         raise HelixError(f"Hämtning från {self.env.name}/{form} misslyckades: för många saknade fält: {removed_fields}")
+
+
+    async def fetch_attachment(self, form: str, entry_id: str, field_name: str, attachment_meta: Any | None = None) -> bytes:
+        """Fetch an attachment from an AR System entry.
+
+        AR REST exposes attachment content either through a href in the field
+        payload or through /entry/{form}/{entryId}/attach/{fieldName}. We try the
+        explicit href first when present, then fall back to the standard REST
+        attachment endpoint. This is used only for transport export from Object
+        Modification Log and never writes to either environment.
+        """
+        href = None
+        if isinstance(attachment_meta, dict):
+            href = attachment_meta.get("href") or attachment_meta.get("url")
+        elif isinstance(attachment_meta, list) and attachment_meta and isinstance(attachment_meta[0], dict):
+            href = attachment_meta[0].get("href") or attachment_meta[0].get("url")
+
+        headers = self._headers() | {"Accept": "application/octet-stream,*/*", "X-Requested-By": "XMLHttpRequest"}
+        candidates: list[str] = []
+        if href:
+            candidates.append(str(href))
+        form_q = quote(form, safe="")
+        entry_q = quote(str(entry_id), safe="")
+        field_q = quote(field_name, safe="")
+        candidates.extend([
+            f"/api/arsys/v1/entry/{form_q}/{entry_q}/attach/{field_q}",
+            f"/api/arsys/v1/entry/{form}/{entry_id}/attach/{field_name}",
+            # Some Helix/ITSM deployments expose a simplified attachment endpoint.
+            # Keep it as a fallback; the platform endpoint above remains primary.
+            f"/api/com.bmc.dsm.itsm.itsm-rest-api/attachment/download/{form_q}/{field_q}/{entry_q}",
+        ])
+
+        last_error = ""
+        for url in candidates:
+            start = time.perf_counter()
+            r = await self.client.get(url, headers=headers)
+            elapsed = (time.perf_counter() - start) * 1000
+            if r.status_code < 400:
+                log.info("fetch attachment ok env=%s form=%s entry=%s field=%s bytes=%s elapsed_ms=%.1f", self.env.name, form, entry_id, field_name, len(r.content), elapsed)
+                return r.content
+            last_error = f"HTTP {r.status_code} {r.text[:300]}"
+            log.warning("fetch attachment failed env=%s url=%s status=%s elapsed_ms=%.1f response=%s", self.env.name, url, r.status_code, elapsed, r.text[:300])
+        raise HelixError(f"Hämtning av attachment från {self.env.name}/{form}/{entry_id}/{field_name} misslyckades: {last_error}")
+
+
+    async def create_form_entry(self, form: str, values: dict[str, Any]) -> dict[str, Any]:
+        """Create an AR System form entry and return basic metadata.
+
+        Used by the transport/RDA draft flow. Like fetch_form_entries, this is
+        defensive about version differences: if AR Server reports an unknown
+        field, that field is removed and the create is retried.
+        """
+        clean_values = {k: v for k, v in (values or {}).items() if k and v is not None}
+        removed_fields: list[str] = []
+        for retry in range(25):
+            start = time.perf_counter()
+            log.info("create form entry start env=%s form=%s fields=%s retry=%s", self.env.name, form, len(clean_values), retry)
+            r = await self.client.post(
+                f"/api/arsys/v1/entry/{form}",
+                headers=self._headers() | {"Content-Type": "application/json", "Accept": "application/json"},
+                json={"values": clean_values},
+            )
+            elapsed = (time.perf_counter() - start) * 1000
+            if r.status_code < 400:
+                location = r.headers.get("Location") or r.headers.get("location") or ""
+                entry_id = location.rstrip("/").split("/")[-1] if location else ""
+                try:
+                    data = r.json() if r.content else {}
+                except Exception:
+                    data = {}
+                log.info("create form entry ok env=%s form=%s entry_id=%s elapsed_ms=%.1f", self.env.name, form, entry_id, elapsed)
+                return {"entry_id": entry_id, "location": location, "response": data, "removed_fields": removed_fields}
+            missing = _missing_field_from_error(r.text)
+            if r.status_code == 400 and missing and missing in clean_values:
+                clean_values.pop(missing, None)
+                removed_fields.append(missing)
+                log.warning("create form entry retry without missing field env=%s form=%s missing_field=%s remaining_fields=%s response=%s", self.env.name, form, missing, len(clean_values), r.text[:300])
+                continue
+            log.error("create form entry failed env=%s form=%s status=%s elapsed_ms=%.1f response=%s", self.env.name, form, r.status_code, elapsed, r.text[:500])
+            raise HelixError(f"Skapande i {self.env.name}/{form} misslyckades: HTTP {r.status_code} {r.text[:500]}")
+        raise HelixError(f"Skapande i {self.env.name}/{form} misslyckades: för många saknade fält: {removed_fields}")
+
+    async def upload_entry_attachment(self, form: str, entry_id: str, field_name: str, filename: str, content: bytes) -> dict[str, Any]:
+        """Upload/replace a single attachment on an existing entry.
+
+        AR REST attachment upload varies a bit between releases. We try the
+        standard multipart update endpoint first and then a few common field-part
+        naming variants. This is only used for RDA draft package creation.
+        """
+        headers = self._headers() | {"Accept": "application/json", "X-Requested-By": "XMLHttpRequest"}
+        form_q = quote(form, safe="")
+        entry_q = quote(str(entry_id), safe="")
+        field_q = quote(field_name, safe="")
+        urls = [
+            f"/api/arsys/v1/entry/{form_q}/{entry_q}",
+            f"/api/arsys/v1/entry/{form}/{entry_id}",
+            f"/api/arsys/v1/entry/{form_q}/{entry_q}/attach/{field_q}",
+            f"/api/arsys/v1/entry/{form}/{entry_id}/attach/{field_name}",
+        ]
+        # BMC AR REST expects attachment parts to be named attach-{fieldName}
+        # for create/update multipart requests. Keep a few fallbacks because
+        # field labels/ids may be accepted differently across AR versions.
+        part_names = [f"attach-{field_name}", f"attach-{field_q}", field_name, field_q]
+        last_error = ""
+        for url in urls:
+            for part_name in part_names:
+                start = time.perf_counter()
+                files = {
+                    "entry": (None, json.dumps({"values": {}}, ensure_ascii=False), "application/json"),
+                    part_name: (filename, content, "text/plain" if filename.lower().endswith(".def") else "application/octet-stream"),
+                }
+                method = self.client.put if "/attach/" not in url else self.client.post
+                r = await method(url, headers=headers, files=files)
+                elapsed = (time.perf_counter() - start) * 1000
+                if r.status_code < 400:
+                    log.info("upload attachment ok env=%s form=%s entry=%s field=%s part=%s bytes=%s elapsed_ms=%.1f", self.env.name, form, entry_id, field_name, part_name, len(content), elapsed)
+                    try:
+                        data = r.json() if r.content else {}
+                    except Exception:
+                        data = {}
+                    return {"uploaded": True, "url": url, "part": part_name, "response": data}
+                last_error = f"HTTP {r.status_code} {r.text[:300]}"
+                log.warning("upload attachment failed env=%s url=%s field=%s part=%s status=%s elapsed_ms=%.1f response=%s", self.env.name, url, field_name, part_name, r.status_code, elapsed, r.text[:300])
+        raise HelixError(f"Upload av attachment till {self.env.name}/{form}/{entry_id}/{field_name} misslyckades: {last_error}")
 
     async def fetch_entries(self, obj_type: ObjectType, q: str | None, limit: int = 500) -> list[dict[str, Any]]:
         return await self.fetch_form_entries(obj_type.form, obj_type.fields_for_api(), q=q, limit=limit)
