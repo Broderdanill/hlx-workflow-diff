@@ -34,9 +34,9 @@ class CacheScope:
         payload = self.normalized()
         # Bump this when scope semantics change so old PVC cache created with a
         # broader/buggy scope is not reused silently.
-        payload["scope_model"] = "form-prefix-schemaid-int-workflowid-v11-migrator-deep-diff"
+        payload["scope_model"] = "form-prefix-schemaid-int-workflowid-v13-no-standalone-views-ignore-groups"
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        empty = {"exclude_form_prefixes": [], "include_form_prefixes": [], "scope_model": "form-prefix-schemaid-int-workflowid-v11-migrator-deep-diff"}
+        empty = {"exclude_form_prefixes": [], "include_form_prefixes": [], "scope_model": "form-prefix-schemaid-int-workflowid-v13-no-standalone-views-ignore-groups"}
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16] if payload != empty else ""
 
 
@@ -118,15 +118,41 @@ CONTAINER_RELATED = [
     RelatedForm("AR System Metadata: cntnr_ownr_obj", "containerId", ["containerId", "objIndex", "ownerObjId", "ownerObjType", "overlayGroup", "overlayExtended"]),
 ]
 
-FORM_RELATED = [
-    RelatedForm("AR System Metadata: field", "schemaId", ["schemaId", "fieldId", "fieldName", "fieldType", "datatype", "fOption", "createMode", "defaultValue", "helpText", "changeDiary", "overlayGroup", "overlayProp", "resolvedfieldId", "resolvedName", "sourceSchemaId"]),
-    RelatedForm("AR System Metadata: field_permissions", "schemaId", ["schemaId", "fieldId", "groupId", "permission", "overlayGroup", "overlayExtended"]),
-    RelatedForm("AR System Metadata: field_enum_values", "schemaId", ["schemaId", "fieldId", "enumItem", "enumValue", "enumLabel", "overlayGroup", "overlayExtended"]),
-    RelatedForm("AR System Metadata: schema_group_ids", "schemaId", ["schemaId", "groupId", "permission", "overlayGroup", "overlayExtended"]),
-    RelatedForm("AR System Metadata: schema_index", "schemaId", ["schemaId", "indexName", "listIndex", "uniqueFlag", "numFields", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "overlayGroup", "overlayExtended"]),
-    RelatedForm("AR System Metadata: vui", "schemaId", ["schemaId", "vuiName", "vuiId", "vuiType", "locale", "helpText", "changeDiary", "overlayGroup", "overlayProp", "resolvedName", "resolvedVuiId"]),
-    RelatedForm("AR System Metadata: view_mapping", "schemaId", ["schemaId", "fieldId", "extField", "overlayGroup"]),
+VIEW_RELATED = [
+    RelatedForm("AR System Metadata: viewcomponent", "viewMetaDataId", ["viewMetaDataId", "parentId", "name", "isContainer", "guid", "layout", "componentType", "propertiesByName", "owner", "lastChanged", "changeDiary", "helpText", "objProp", "smObjProp", "overlayGroup", "overlayProp", "resolvedName"]),
 ]
+
+
+FORM_RELATED = [
+    # Base fields and detailed field subtype metadata
+    RelatedForm("AR System Metadata: field", "schemaId", ["schemaId", "fieldId", "fieldName", "fieldType", "datatype", "fOption", "fbOption", "createMode", "defaultValue", "helpText", "changeDiary", "owner", "lastChanged", "timestamp", "overlayGroup", "overlayProp", "resolvedfieldId", "resolvedName", "sourceSchemaId"]),
+    RelatedForm("AR System Metadata: field_char", "schemaId", ["schemaId", "fieldId", "maxLength", "charMenu", "fullTextOptions", "lengthUnits", "menuStyle", "pattern", "qbeMatchOp", "storageOptionForCLOB", "overlayGroup"]),
+    RelatedForm("AR System Metadata: field_column", "schemaId", ["schemaId", "fieldId", "colLength", "dataField", "dataSource", "parent", "overlayGroup"]),
+    RelatedForm("AR System Metadata: field_curr", "schemaId", ["schemaId", "fieldId", "allowCurr", "arprecision", "funcCurr", "rangeHigh", "rangeLow", "overlayGroup"]),
+    RelatedForm("AR System Metadata: field_dispprop", "schemaId", ["schemaId", "fieldId", "vuiId", "label", "listIndex", "propLong", "propShort", "srvPropLong", "srvPropShort", "overlayGroup"]),
+    RelatedForm("AR System Metadata: field_enum", "schemaId", ["schemaId", "fieldId", "queryShort", "queryLong", "serverName", "enumStyle", "maxEnum", "nameField", "numberField", "schemaName", "overlayGroup"]),
+    RelatedForm("AR System Metadata: field_enum_values", "schemaId", ["schemaId", "fieldId", "enumId", "value", "overlayGroup"]),
+    RelatedForm("AR System Metadata: field_permissions", "schemaId", ["schemaId", "fieldId", "groupId", "permission", "overlayGroup", "overlayExtended"]),
+    RelatedForm("AR System Metadata: field_table", "schemaId", ["schemaId", "fieldId", "queryShort", "queryLong", "sampleSchema", "sampleServer", "maxRetrieve", "numColumns", "tfSchema", "tfServer", "overlayGroup"]),
+    RelatedForm("AR System Metadata: field_inheritance", "sourceSchemaId", ["sourceSchemaId", "inheritorSchemaId", "sourceSchemaOverlayGroup", "inheritorSchemaOverlayGroup", "isInheritingCoreFields", "isInheritingPermissions", "isInheritingWorkflow", "inheritanceOverlayGroup"]),
+
+    # Form permissions, indexes, list fields and form-level advanced settings
+    RelatedForm("AR System Metadata: schema_group_ids", "schemaId", ["schemaId", "groupId", "permission", "overlayGroup", "overlayExtended"]),
+    RelatedForm("AR System Metadata: subadmin_group", "schemaId", ["schemaId", "groupId", "overlayGroup", "overlayExtended"]),
+    RelatedForm("AR System Metadata: schema_index", "schemaId", ["schemaId", "indexName", "listIndex", "uniqueFlag", "numFields", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15", "f16", "overlayGroup", "overlayExtended"]),
+    RelatedForm("AR System Metadata: schema_list_fields", "schemaId", ["schemaId", "fieldId", "columnWidth", "listIndex", "separator", "separatorLen", "overlayGroup"]),
+    RelatedForm("AR System Metadata: schema_archive", "Schema ID", ["Schema ID", "enable", "queryShort", "queryLong", "archiveFromForm", "archiveToFile", "archiveToForm", "archiveType", "hourmask", "minute", "monthday", "weekday", "overlayGroup"]),
+    RelatedForm("AR System Metadata: schema_audit", "Schema ID", ["Schema ID", "enable", "queryShort", "queryLong", "auditMask", "form", "style", "overlayGroup"]),
+    RelatedForm("AR System Metadata: schema_join", "Schema ID", ["Schema ID", "queryShort", "queryLong", "memberA", "memberB", "options", "overlayGroup"]),
+    RelatedForm("AR System Metadata: vendor_mapping", "schemaId", ["schemaId", "fieldId", "extField", "overlayGroup"]),
+
+    # VUI/views and mappings used to understand visual differences
+    RelatedForm("AR System Metadata: vui", "schemaId", ["schemaId", "vuiName", "vuiId", "vuiType", "locale", "helpText", "changeDiary", "owner", "lastChanged", "timestamp", "overlayGroup", "overlayProp", "resolvedName", "resolvedVuiId"]),
+    RelatedForm("AR System Metadata: view_mapping", "schemaId", ["schemaId", "fieldId", "extField", "overlayGroup"]),
+    # Views are form metadata. They must be shown under Forms, not as a standalone object category.
+    RelatedForm("AR System Metadata: views", "schemaId", ["schemaId", "viewMetaDataId", "name", "label", "version", "targetviewdefinitionguid", "guid", "params", "changeDiary", "helpText", "objProp", "smObjProp", "overlayGroup", "overlayProp", "resolvedName", "bundleScope", "bundleScopeEnabled"]),
+]
+
 
 MENU_RELATED = [
     RelatedForm("AR System Metadata: char_menu_dd", "Char Menu ID", ["Char Menu ID", "arschema", "hiddenToo", "nameType", "path", "server", "structSubtype", "structType", "valueFormat", "overlayGroup"]),
@@ -136,11 +162,16 @@ MENU_RELATED = [
     RelatedForm("AR System Metadata: char_menu_sql", "Char Menu ID", ["Char Menu ID", "externList", "keywordList", "labelIndex", "labelIndex2", "labelIndex3", "labelIndex4", "labelIndex5", "parameterList", "path", "server", "sqlCmdLong", "sqlCmdShort", "valueIndex", "overlayGroup"]),
 ]
 
+
+ESCALATION_RELATED = [
+    RelatedForm("AR System Metadata: escal_mapping", "escalationId", ["escalationId", "schemaId", "objIndex", "escalationOverlayGroup", "overlayExtended"]),
+]
+
 DEFAULT_OBJECT_TYPES = [
     ObjectType(
         key="form", label="Forms", form="AR System Metadata: arschema", name_field="name",
-        id_fields=["schemaId", "Request ID", "Record ID"],
-        compare_fields=["numFields", "schemaType", "numVuis", "coreVersion", "defaultVui", "nextFieldId", "safeGuard", "viewName", "objProp", "smObjProp", "version", "overlayGroup", "overlayProp", "resolvedName", "schemaRowIdentifier", "bundleScope", "bundleScopeEnabled"],
+        id_fields=["Schema ID", "Request ID", "Record ID"],
+        compare_fields=["numFields", "schemaType", "numVuis", "coreVersion", "defaultVui", "maxStatEnums", "nextFieldId", "nextId", "safeGuard", "shViewName", "upgrdVersion", "viewName", "objProp", "smObjProp", "version", "overlayGroup", "overlayProp", "resolvedName", "resolvedSchemaId", "isCreateEntryAllowed", "dataSourceSchemaId", "isInheritable", "schemaRowIdentifier", "isDataShared", "bundleScope", "bundleScopeEnabled"],
         search_fields=["name", "resolvedName", "viewName"], related_forms=FORM_RELATED,
     ),
     ObjectType(
@@ -159,13 +190,14 @@ DEFAULT_OBJECT_TYPES = [
         key="escalation", label="Escalations", form="AR System Metadata: escalation", name_field="name",
         id_fields=["Escalation ID", "Request ID", "Record ID"],
         compare_fields=["enable", "numActions", "numElses", "queryShort", "queryLong", "objProp", "smObjProp", "version", "firetmType", "hourmask", "minute", "monthday", "safeGuard", "tminterval", "weekday", "wkConnType", "overlayGroup", "overlayProp", "resolvedName", "bundleScope", "bundleScopeEnabled"],
-        search_fields=["name", "queryShort", "queryLong", "resolvedName"], related_forms=[RelatedForm("AR System Metadata: escal_mapping", "escalationId", ["escalationId", "schemaId", "objIndex", "escalationOverlayGroup", "overlayExtended"])],
+        search_fields=["name", "queryShort", "queryLong", "resolvedName"], related_forms=ESCALATION_RELATED,
     ),
     ObjectType(key="active_link_guide", label="Active Link Guides", form="AR System Metadata: arcontainer", name_field="name", type_field="containerType", type_values=[1], id_fields=["Container ID", "Request ID", "Record ID"], compare_fields=COMMON_CONTAINER_FIELDS, search_fields=["name", "label", "description", "resolvedName"], related_forms=CONTAINER_RELATED),
     ObjectType(key="filter_guide", label="Filter Guides", form="AR System Metadata: arcontainer", name_field="name", type_field="containerType", type_values=[4], id_fields=["Container ID", "Request ID", "Record ID"], compare_fields=COMMON_CONTAINER_FIELDS, search_fields=["name", "label", "description", "resolvedName"], related_forms=CONTAINER_RELATED),
     ObjectType(key="application", label="Applications", form="AR System Metadata: arcontainer", name_field="name", type_field="containerType", type_values=[2], id_fields=["Container ID", "Request ID", "Record ID"], compare_fields=COMMON_CONTAINER_FIELDS, search_fields=["name", "label", "description", "resolvedName"], related_forms=CONTAINER_RELATED),
     ObjectType(key="packing_list", label="Packing Lists", form="AR System Metadata: arcontainer", name_field="name", type_field="containerType", type_values=[3], id_fields=["Container ID", "Request ID", "Record ID"], compare_fields=COMMON_CONTAINER_FIELDS, search_fields=["name", "label", "description", "resolvedName"], related_forms=CONTAINER_RELATED),
     ObjectType(key="web_service", label="Web Services", form="AR System Metadata: arcontainer", name_field="name", type_field="containerType", type_values=[5], id_fields=["Container ID", "Request ID", "Record ID"], compare_fields=COMMON_CONTAINER_FIELDS, search_fields=["name", "label", "description", "resolvedName"], related_forms=CONTAINER_RELATED),
+    ObjectType(key="image", label="Images", form="AR System Metadata: image", name_field="name", id_fields=["Image ID", "Request ID", "Record ID"], compare_fields=["imageType", "description", "checkSum", "imageSize", "safeGuard", "objProp", "smObjProp", "version", "overlayGroup", "overlayProp", "resolvedName", "bundleScope", "bundleScopeEnabled"], search_fields=["name", "description", "resolvedName"]),
     ObjectType(key="menu", label="Menus", form="AR System Metadata: char_menu", name_field="name", compare_fields=["menuType", "refreshCode", "safeGuard", "objProp", "smObjProp", "version", "overlayGroup", "overlayProp", "resolvedName", "bundleScope", "bundleScopeEnabled"], search_fields=["name", "resolvedName"], related_forms=MENU_RELATED),
 ]
 
@@ -192,8 +224,8 @@ def _filter_related_by_profile(types: list[ObjectType]) -> list[ObjectType]:
     }
     minimal_keep_keywords = (
         "_mapping", "_group_ids", "permissions", "arreference", "schema_group_ids",
-        "field", "field_permissions", "field_enum_values", "schema_index",
-        "vui", "view_mapping", "arctr_group_ids", "cntnr_ownr_obj",
+        "field", "field_", "field_permissions", "field_enum_values", "schema_", "schema_index",
+        "vui", "view_mapping", "viewcomponent", "arctr_group_ids", "cntnr_ownr_obj",
     )
 
     filtered: list[ObjectType] = []

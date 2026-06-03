@@ -303,7 +303,7 @@ def _id_for(values: dict[str, Any], obj_type: ObjectType) -> str | None:
     # REST entry id/request id is often exposed as e.g. "5008-1". Normalize that
     # to "5008" so fields, views, permissions and indexes are actually linked.
     if obj_type.key == "form":
-        for field in ("schemaId", "schemaID", "schema_id", "Request ID", "Record ID"):
+        for field in ("Schema ID", "schemaId", "schemaID", "schema_id", "resolvedSchemaId", "Request ID", "Record ID"):
             sid = _normalize_schema_id(values.get(field))
             if sid:
                 return sid
@@ -312,7 +312,7 @@ def _id_for(values: dict[str, Any], obj_type: ObjectType) -> str | None:
         if value not in (None, ""):
             return str(value)
     # Vanliga fallbacknamn när REST returnerar databasfält i stället för display label.
-    for field in ("actlinkId", "filterId", "escalationId", "containerId", "schemaId", "charMenuId", "Char Menu ID"):
+    for field in ("actlinkId", "filterId", "escalationId", "containerId", "Schema ID", "schemaId", "charMenuId", "Char Menu ID", "Image ID", "viewMetaDataId"):
         value = values.get(field)
         if value not in (None, ""):
             return str(value)
@@ -327,7 +327,7 @@ def _canonical_related_values(values: dict[str, Any], rel: RelatedForm, ignore_f
     cleaned = {k: v for k, v in values.items() if k not in ignored}
     # Normalize schemaId values in related form metadata too. Some REST entries
     # expose schemaId-like ids as "5008-1" while dictionary relations use 5008.
-    for key in ("schemaId", "schemaID", "schema_id"):
+    for key in ("Schema ID", "schemaId", "schemaID", "schema_id", "resolvedSchemaId"):
         if key in cleaned:
             norm = _normalize_schema_id(cleaned.get(key))
             if norm is not None:
@@ -342,7 +342,7 @@ def group_related(rel: RelatedForm, entries: list[dict[str, Any]], ignore_fields
         parent = values.get(rel.parent_field)
         if parent in (None, ""):
             continue
-        grouped[str(parent)].append(_canonical_related_values(values, rel, ignore_fields))
+        grouped[_normalize_schema_id(parent) if rel.parent_field in {"Schema ID", "schemaId", "schemaID", "schema_id"} else str(parent)].append(_canonical_related_values(values, rel, ignore_fields))
     for parent, rows in grouped.items():
         grouped[parent] = sorted(rows, key=canonical_json)
     return dict(grouped)

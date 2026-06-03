@@ -56,7 +56,7 @@ WORKFLOW_FORM_SCOPED_TYPES = {"actlink", "filter", "escalation"}
 GUIDE_FORM_SCOPED_TYPES = {"active_link_guide", "filter_guide"}
 # These object types are global in AR System. They are not safely derivable from a
 # form-prefix scope, so they are always cached even when cache_scope is active.
-GLOBAL_ALWAYS_CACHE_TYPES = {"application", "packing_list", "web_service", "menu"}
+GLOBAL_ALWAYS_CACHE_TYPES = {"application", "packing_list", "web_service", "menu", "image", "view"}
 FORM_SCOPE_SUPPORTED_TYPES = {"form"} | WORKFLOW_FORM_SCOPED_TYPES | GUIDE_FORM_SCOPED_TYPES | GLOBAL_ALWAYS_CACHE_TYPES
 
 
@@ -149,7 +149,7 @@ def normalize_schema_id(value: Any) -> str | None:
 
 def form_schema_id_from_object(obj: dict[str, Any]) -> str | None:
     values = obj.get("values", {}) or {}
-    for field in ("schemaId", "schemaID", "schema_id"):
+    for field in ("Schema ID", "schemaId", "schemaID", "schema_id", "resolvedSchemaId"):
         sid = normalize_schema_id(values.get(field))
         if sid:
             return sid
@@ -162,7 +162,7 @@ def _object_has_included_schema(obj: dict[str, Any], allowed_schema_ids: set[str
         if not isinstance(rows, list):
             continue
         for row in rows:
-            schema_id = row.get("schemaId") or row.get("schemaID") or row.get("schema_id")
+            schema_id = row.get("Schema ID") or row.get("schemaId") or row.get("schemaID") or row.get("schema_id")
             sid = normalize_schema_id(schema_id)
             if sid is not None and sid in allowed_schema_ids:
                 return True
@@ -222,14 +222,19 @@ IGNORE_GROUPS = {
         "fields": ["timestamp", "modifiedDate", "lastModifiedDate", "lastModifiedOn", "Last Modified Date"],
         "default": True,
     },
+    "environment_ids": {
+        "label": "Miljöspecifika ID:n",
+        "fields": ["Request ID", "Record ID", "SystemID", "IntegerID", "Schema ID", "Active Link ID", "Filter ID", "Escalation ID", "Container ID", "Image ID", "schemaRowIdentifier", "guid", "targetviewdefinitionguid", "viewMetaDataId", "resolvedSchemaId", "resolvedfieldId", "resolvedVuiId"],
+        "default": True,
+    },
     "ownership": {
         "label": "Ägare/ändrad av",
-        "fields": ["owner", "lastChanged", "lastModifiedBy", "modifiedBy"],
+        "fields": ["owner", "lastChanged", "lastModifiedBy", "modifiedBy", "changeDiary"],
         "default": False,
     },
     "overlay": {
         "label": "Overlay/resolved metadata",
-        "fields": ["overlayGroup", "overlayProp", "overlayExtended", "resolvedName", "resolvedfieldId", "resolvedVuiId"],
+        "fields": ["overlayGroup", "overlayProp", "overlayExtended", "resolvedName", "resolvedfieldId", "resolvedVuiId", "resolvedSchemaId", "filterOverlayGroup", "sourceSchemaOverlayGroup", "inheritorSchemaOverlayGroup", "inheritanceOverlayGroup"],
         "default": False,
     },
     "bundle": {
@@ -239,46 +244,80 @@ IGNORE_GROUPS = {
     },
     "object_properties": {
         "label": "Objektegenskaper",
-        "fields": ["objProp", "smObjProp"],
+        "fields": ["objProp", "smObjProp", "safeGuard", "version", "coreVersion", "upgrdVersion"],
+        "default": False,
+    },
+    "form_counters": {
+        "label": "Formulärräknare/next-id",
+        "fields": ["numFields", "numVuis", "nextFieldId", "nextId", "maxStatEnums", "numActions", "numElses", "numReferences", "numColumns"],
         "default": False,
     },
     "permissions": {
         "label": "Behörigheter",
-        "fields": ["permission", "groupId", "groupList", "AR System Metadata: field_permissions", "AR System Metadata: schema_group_ids", "AR System Metadata: actlink_group_ids", "AR System Metadata: arctr_group_ids"],
+        "fields": ["permission", "groupId", "groupList", "viewRights", "modifyRights", "AR System Metadata: field_permissions", "AR System Metadata: schema_group_ids", "AR System Metadata: subadmin_group", "AR System Metadata: actlink_group_ids", "AR System Metadata: arctr_group_ids"],
         "default": False,
     },
     "field_definitions": {
         "label": "Fältdefinitioner",
-        "fields": ["fieldId", "fieldName", "fieldType", "datatype", "fOption", "createMode", "defaultValue", "AR System Metadata: field"],
+        "fields": ["fieldId", "fieldName", "fieldType", "datatype", "fOption", "fbOption", "createMode", "defaultValue", "helpText", "sourceSchemaId", "isInheritingCoreFields", "isInheritingPermissions", "isInheritingWorkflow", "AR System Metadata: field", "AR System Metadata: field_char", "AR System Metadata: field_curr", "AR System Metadata: field_enum", "AR System Metadata: field_inheritance"],
+        "default": False,
+    },
+    "field_layout": {
+        "label": "Fältlayout/display properties",
+        "fields": ["AR System Metadata: field_dispprop", "AR System Metadata: field_column", "propLong", "propShort", "srvPropLong", "srvPropShort", "label", "listIndex", "vuiId", "colLength", "dataField", "dataSource", "parent"],
+        "default": False,
+    },
+    "field_table": {
+        "label": "Tabell-/kolumnfält",
+        "fields": ["AR System Metadata: field_table", "queryShort", "queryLong", "sampleSchema", "sampleServer", "tfSchema", "tfServer", "maxRetrieve", "numColumns"],
         "default": False,
     },
     "enum_values": {
         "label": "Enum-värden",
-        "fields": ["enumItem", "enumValue", "enumLabel", "AR System Metadata: field_enum_values"],
+        "fields": ["enumId", "enumItem", "enumValue", "enumLabel", "value", "enumStyle", "maxEnum", "AR System Metadata: field_enum_values"],
         "default": False,
     },
     "views": {
-        "label": "Vyer/VUI",
-        "fields": ["vuiName", "vuiId", "vuiType", "locale", "AR System Metadata: vui", "AR System Metadata: view_mapping"],
+        "label": "Vyer/VUI och view mapping",
+        "fields": ["vuiName", "vuiId", "vuiType", "locale", "viewName", "shViewName", "AR System Metadata: vui", "AR System Metadata: view_mapping", "AR System Metadata: views", "AR System Metadata: viewcomponent", "targetviewdefinitionguid", "params"],
+        "default": False,
+    },
+    "schema_metadata": {
+        "label": "Schema/formulärmetadata",
+        "fields": ["schemaType", "defaultVui", "isCreateEntryAllowed", "dataSourceSchemaId", "isInheritable", "isDataShared", "AR System Metadata: schema_index", "AR System Metadata: schema_list_fields", "AR System Metadata: schema_archive", "AR System Metadata: schema_audit", "AR System Metadata: schema_join", "AR System Metadata: vendor_mapping"],
         "default": False,
     },
     "indexes": {
-        "label": "Index",
-        "fields": ["indexName", "listIndex", "uniqueFlag", "numFields", "AR System Metadata: schema_index"],
+        "label": "Index/listfält",
+        "fields": ["indexName", "uniqueFlag", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15", "f16", "columnWidth", "separator", "separatorLen", "AR System Metadata: schema_index", "AR System Metadata: schema_list_fields"],
         "default": False,
     },
     "guide_members": {
-        "label": "Guide-medlemmar/referenser",
-        "fields": ["referenceOrder", "referenceType", "referenceId", "referenceObjId", "AR System Metadata: arreference"],
+        "label": "Guide-/containerreferenser",
+        "fields": ["referenceOrder", "referenceType", "referenceId", "referenceObjId", "ownerObjId", "ownerObjType", "AR System Metadata: arreference", "AR System Metadata: cntnr_ownr_obj"],
+        "default": False,
+    },
+    "workflow_conditions": {
+        "label": "Workflow villkor/körning",
+        "fields": ["queryShort", "queryLong", "executeMask", "opSet", "alOrder", "fOrder", "firetmType", "hourmask", "minute", "monthday", "weekday", "tminterval", "wkConnType"],
         "default": False,
     },
     "workflow_actions": {
         "label": "Workflow actions",
-        "fields": ["actionIndex", "assignShort", "assignLong", "command", "commandLong", "fieldMaplong", "fieldMapshort", "AR System Metadata: actlink_set", "AR System Metadata: actlink_push", "AR System Metadata: actlink_message", "AR System Metadata: actlink_process", "AR System Metadata: filter_set", "AR System Metadata: filter_push", "AR System Metadata: filter_message", "AR System Metadata: filter_process"],
+        "fields": ["actionIndex", "assignShort", "assignLong", "command", "commandLong", "fieldMaplong", "fieldMapshort", "msgText", "msgType", "serverName", "schemaName", "sampleSchema", "sampleServer", "AR System Metadata: actlink_set", "AR System Metadata: actlink_push", "AR System Metadata: actlink_message", "AR System Metadata: actlink_process", "AR System Metadata: actlink_open", "AR System Metadata: actlink_call", "AR System Metadata: filter_set", "AR System Metadata: filter_push", "AR System Metadata: filter_message", "AR System Metadata: filter_process", "AR System Metadata: filter_call"],
+        "default": False,
+    },
+    "menus": {
+        "label": "Menyinnehåll",
+        "fields": ["menuType", "refreshCode", "AR System Metadata: char_menu_dd", "AR System Metadata: char_menu_file", "AR System Metadata: char_menu_list", "AR System Metadata: char_menu_query", "AR System Metadata: char_menu_sql", "path", "value", "valueField", "labelField", "sqlCmdShort", "sqlCmdLong"],
+        "default": False,
+    },
+    "images": {
+        "label": "Bilder/checksum",
+        "fields": ["imageType", "description", "checkSum", "imageSize", "AR System Metadata: image"],
         "default": False,
     },
 }
-
 
 def default_ignore_options() -> list[str]:
     return [key for key, item in IGNORE_GROUPS.items() if item.get("default")]
@@ -382,7 +421,7 @@ def parent_ids_from_raw(raw: list[dict[str, Any]], obj_type: ObjectType) -> list
         seen: set[str] = set()
         for entry in raw:
             values = entry.get("values", {}) or {}
-            value = values.get("schemaId") or values.get("schemaID") or values.get("schema_id") or entry.get("id")
+            value = values.get("Schema ID") or values.get("schemaId") or values.get("schemaID") or values.get("schema_id") or values.get("resolvedSchemaId") or entry.get("id")
             sid = normalize_schema_id(value)
             if sid and sid not in seen:
                 seen.add(sid)
@@ -392,7 +431,7 @@ def parent_ids_from_raw(raw: list[dict[str, Any]], obj_type: ObjectType) -> list
     fields = list(obj_type.id_fields) + [
         "Active Link ID", "Filter ID", "Escalation ID", "Container ID",
         "actlinkId", "filterId", "escalationId", "containerId",
-        "schemaId", "charMenuId", "Char Menu ID", "Request ID", "Record ID",
+        "Schema ID", "schemaId", "charMenuId", "Char Menu ID", "Image ID", "viewMetaDataId", "Request ID", "Record ID",
     ]
     ids: list[str] = []
     seen: set[str] = set()
@@ -474,6 +513,21 @@ def deep_verify_scoped_objects_by_default(obj_type: ObjectType) -> bool:
     if obj_type.key in WORKFLOW_FORM_SCOPED_TYPES | GUIDE_FORM_SCOPED_TYPES:
         return (os.getenv("HELIX_INCREMENTAL_VERIFY_SCOPED_WORKFLOW", "true") or "true").lower() in {"1", "true", "yes", "on"}
     return False
+
+
+def incremental_purge_deleted_enabled() -> bool:
+    """Whether an incremental check is allowed to remove cached objects.
+
+    AR metadata scopes can be intentionally narrower than the previously cached
+    snapshot, and some metadata forms can return a partial result during a cheap
+    base scan. Treating every missing base row as a deletion made the object
+    counts shrink after "Kontrollera ändringar" even when the environment had
+    not changed. By default, incremental sync refreshes changed objects and
+    preserves cached objects that are not seen in the base scan. A full rebuild
+    still gives an authoritative snapshot. Set HELIX_INCREMENTAL_PURGE_DELETED=true
+    only if you explicitly want incremental checks to purge missing objects.
+    """
+    return (os.getenv("HELIX_INCREMENTAL_PURGE_DELETED", "false") or "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
 async def collect_base_only(env: Environment, obj_type: ObjectType) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
@@ -766,7 +820,14 @@ async def sync_one(env: Environment, obj_type: ObjectType, deep: bool, mode: str
         update_env_state(env.name, phase="dirty-scan", phase_label=f"Identifierar ändringar i {obj_type.label}", phase_current=len(base_objects), phase_total=len(base_objects))
         cached_objects = current.get("objects", {}) or {}
         changed_names: list[str] = []
-        deleted_names = sorted(set(cached_objects) - set(base_objects))
+        candidate_deleted_names = sorted(set(cached_objects) - set(base_objects))
+        purge_deleted = incremental_purge_deleted_enabled()
+        deleted_names = candidate_deleted_names if purge_deleted else []
+        if candidate_deleted_names and not purge_deleted:
+            log.info(
+                "incremental preserving cached objects not returned by base scan env=%s type=%s candidates=%s purge_deleted=false",
+                env.name, obj_type.key, len(candidate_deleted_names),
+            )
 
         if deep_verify_scoped_objects_by_default(obj_type):
             # Preserve exactness for scoped datasets: all currently scoped objects
@@ -789,8 +850,8 @@ async def sync_one(env: Environment, obj_type: ObjectType, deep: bool, mode: str
 
         mark_cache_checked(env.name, obj_type, True, changed=bool(changed_names or deleted_names))
         log.info(
-            "incremental scan env=%s type=%s total=%s changed=%s deleted=%s reused=%s verify_scoped=%s",
-            env.name, obj_type.key, len(base_objects), len(changed_names), len(deleted_names), max(0, len(base_objects) - len(changed_names)), deep_verify_scoped_objects_by_default(obj_type),
+            "incremental scan env=%s type=%s total=%s changed=%s deleted=%s possible_deleted=%s reused=%s verify_scoped=%s purge_deleted=%s",
+            env.name, obj_type.key, len(base_objects), len(changed_names), len(deleted_names), len(candidate_deleted_names), max(0, len(base_objects) - len(changed_names)), deep_verify_scoped_objects_by_default(obj_type), purge_deleted,
         )
 
         if not changed_names and not deleted_names:
@@ -804,6 +865,8 @@ async def sync_one(env: Environment, obj_type: ObjectType, deep: bool, mode: str
                 "count": current.get("count", len(cached_objects)),
                 "mode": mode,
                 "reused": len(cached_objects),
+                "possible_deleted_objects": len(candidate_deleted_names),
+                "purge_deleted": purge_deleted,
             }
 
         changed_raw_names = set(changed_names)
@@ -823,7 +886,14 @@ async def sync_one(env: Environment, obj_type: ObjectType, deep: bool, mode: str
         _, changed_deep = await collect(env, obj_type, q=None, ignore_fields=set(), deep=True, parent_ids=parent_ids, raw_override=changed_raw)
         update_env_state(env.name, phase="deep-refresh", phase_label=f"Läser djupmetadata för {obj_type.label}", phase_current=len(changed_raw), phase_total=len(changed_raw))
 
-        merged = {name: obj for name, obj in cached_objects.items() if name not in set(deleted_names) and name in base_objects}
+        if purge_deleted:
+            merged = {name: obj for name, obj in cached_objects.items() if name not in set(deleted_names) and name in base_objects}
+        else:
+            # Preserve objects that were present in the previous deep snapshot but
+            # were not returned by the cheap base scan. This prevents a manual
+            # "Kontrollera ändringar" from shrinking the cache because of a
+            # narrower/incomplete scan.
+            merged = dict(cached_objects)
         for name, obj in base_objects.items():
             if name not in changed_raw_names and name in merged:
                 # Update the cheap/base values while preserving already cached deep metadata.
@@ -834,7 +904,15 @@ async def sync_one(env: Environment, obj_type: ObjectType, deep: bool, mode: str
                 merged[name] = {**obj, "values": new_values, "fingerprint": fingerprint(new_values, {obj_type.name_field, "Request ID", "Record ID"})}
         merged.update(changed_deep)
         row = save_cache(env.name, obj_type, True, merged)
-        row.update({"changed": True, "mode": mode, "changed_objects": len(changed_names), "deleted_objects": len(deleted_names), "reused_objects": len(merged) - len(changed_deep)})
+        row.update({
+            "changed": True,
+            "mode": mode,
+            "changed_objects": len(changed_names),
+            "deleted_objects": len(deleted_names),
+            "possible_deleted_objects": len(candidate_deleted_names),
+            "purge_deleted": purge_deleted,
+            "reused_objects": len(merged) - len(changed_deep),
+        })
         return row
 
     # First cache, auto-missing cache or forced full sync: build deep snapshot.

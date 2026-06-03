@@ -13,10 +13,10 @@ STATUS_LABELS = {
 # but they are not stable between environments and should not make objects differ.
 VOLATILE_ID_FIELDS = {
     "Request ID", "Record ID", "SystemID", "IntegerID",
-    "schemaId", "schemaID", "schema_id",
+    "Schema ID", "schemaId", "schemaID", "schema_id", "resolvedSchemaId",
     "Active Link ID", "Filter ID", "Escalation ID", "Container ID",
     "actlinkId", "filterId", "escalationId", "containerId",
-    "charMenuId", "Char Menu ID",
+    "charMenuId", "Char Menu ID", "Image ID", "viewMetaDataId",
     "resolvedfieldId", "resolvedVuiId",
 }
 
@@ -42,18 +42,30 @@ def _row_identity(row: dict[str, Any], form: str) -> str:
     f = form.lower()
 
     candidates: list[list[str]] = []
-    if "field_permissions" in f:
+    if "field_dispprop" in f:
+        candidates = [["fieldId", "vuiId", "label", "listIndex"], ["fieldId", "vuiId", "listIndex"], ["fieldId", "vuiId"]]
+    elif "field_permissions" in f:
         candidates = [["fieldId", "groupId"], ["fieldName", "groupId"]]
     elif "field_enum_values" in f:
-        candidates = [["fieldId", "enumItem"], ["fieldId", "enumValue"], ["fieldId", "enumLabel"]]
+        candidates = [["fieldId", "enumId"], ["fieldId", "value"], ["fieldId", "enumItem"], ["fieldId", "enumValue"], ["fieldId", "enumLabel"]]
+    elif "field_" in f:
+        candidates = [["fieldId", "vuiId"], ["fieldId", "listIndex"], ["fieldId", "path"], ["fieldId"]]
     elif f.endswith(": field") or " metadata: field" in f:
         candidates = [["fieldName"], ["fieldId"]]
     elif "schema_group_ids" in f or "group_ids" in f or "arctr_group_ids" in f:
         candidates = [["groupId"], ["permission", "groupId"]]
+    elif "schema_list_fields" in f:
+        candidates = [["listIndex", "fieldId"], ["fieldId"]]
+    elif "schema_archive" in f or "schema_audit" in f or "schema_join" in f:
+        candidates = [["Schema ID"], ["form"], ["archiveToForm"]]
     elif "schema_index" in f:
         candidates = [["indexName"], ["listIndex"], ["f1", "f2", "f3", "f4", "f5"]]
+    elif "viewcomponent" in f:
+        candidates = [["guid"], ["parentId", "name"], ["viewMetaDataId", "name"], ["componentType", "name"]]
     elif "view_mapping" in f:
         candidates = [["fieldId", "extField"], ["fieldName", "extField"]]
+    elif f.endswith(": views") or " metadata: views" in f:
+        candidates = [["guid"], ["viewMetaDataId"], ["name"]]
     elif f.endswith(": vui") or " metadata: vui" in f:
         candidates = [["vuiName", "locale"], ["vuiId"], ["resolvedName", "locale"]]
     elif "arreference" in f:

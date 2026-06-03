@@ -334,3 +334,26 @@ Djupmetadata jämförs nu rad-för-rad med stabila nycklar:
 Det betyder att du inte bara ser att exempelvis ett formulär skiljer sig, utan också vilket relaterat fält, vy, permission, action eller guide-medlem som saknas eller avviker.
 
 Formulärens interna REST-id normaliseras också från exempelvis `5008-1` till dictionary-id `5008` när relaterade formulärfält, vyer och permissions hämtas.
+
+
+## v28.16 metadata coverage
+
+Denna version breddar den djupa cachen för att ligga närmare BMC Migrator: fler `field_*`, `schema_*`, VUI/view mapping, images, views/viewcomponent och escalation mapping läses in och jämförs rad-/egenskapsbaserat. Miljöspecifika ID-fält ignoreras i diffen.
+
+
+## v28.17
+
+- Tog bort de separata summeringskorten ovanför resultatet.
+- Varje kategori visar nu status direkt med färgmarkering i vänsterkant: grön = matchar, gul = avvikelser/saknas.
+- Views/vyer ska behandlas som formulärmetadata och inte som fristående GUI-kategori.
+
+### Incremental sync och objektantal
+
+`Kontrollera ändringar` uppdaterar cachen inkrementellt men rensar inte längre bort objekt bara för att de inte råkar komma tillbaka i den snabba bas-skanningen. Detta förhindrar att objektantalet minskar efter en kontroll när miljön egentligen inte har ändrats. Vill du tillåta att incremental sync tar bort saknade objekt kan du sätta `HELIX_INCREMENTAL_PURGE_DELETED=true`, men standard är `false`. En ny tom cache eller full ombyggnad ger fortfarande en auktoritativ snapshot.
+
+
+## v28.19
+
+- Views är inte längre en separat objektkategori i GUI:t/resultatet. Vyer behandlas som formulärmetadata under Forms tillsammans med VUI, view mapping och layout/display metadata.
+- Ignore metadata-listan är utökad så valen bättre speglar den metadata som faktiskt cacheas in: miljöspecifika ID:n, fältdefinitioner, fältlayout, VUI/views, schema metadata, workflow-villkor/actions, guider, menyer och images.
+- Cache-scope är bumpad så cache byggs om en gång efter uppgraderingen.

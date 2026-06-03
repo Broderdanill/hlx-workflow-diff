@@ -17,7 +17,7 @@ data:
     # den djupa jämförelsen använder standardstödet för actions, mappings, guide references, fält och menyer.
 
     cache_scope:
-      include_form_prefixes: [HLX*,AR*]
+      include_form_prefixes: [HLX*]
       exclude_form_prefixes: []
 ---
 apiVersion: v1

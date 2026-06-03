@@ -164,30 +164,7 @@
     {% if result_groups %}
       <section class="results-toolbar card slim">
         <strong>Resultat: {{ form.source_env }} → {{ form.target_env }}</strong>
-        <span>Börja med summeringen nedan. Expandera bara kategorier med avvikelser när du vill se exakt vilka fält som skiljer.</span>
-      </section>
-
-      <section class="category-overview" aria-label="Summerat jämförelseresultat">
-        {% for group in result_groups %}
-          {% set result = group.result %}
-          {% set issue_count = result.summary.different + result.summary.missing %}
-          <a class="overview-card {{ 'all-ok' if issue_count == 0 else 'has-issues' }}" href="#category-{{ group.type.key }}">
-            <div class="overview-top">
-              <span class="overview-title">{{ group.type.label }}</span>
-              {% if issue_count == 0 %}
-                <span class="health ok">Alla samma</span>
-              {% else %}
-                <span class="health warn">{{ issue_count }} avvikelse{{ 'r' if issue_count != 1 else '' }}</span>
-              {% endif %}
-            </div>
-            <div class="overview-numbers">
-              <span>{{ result.summary.total }} totalt</span>
-              <span>{{ result.summary.equal }} lika</span>
-              <span>{{ result.summary.different }} olika</span>
-              <span>{{ result.summary.missing }} saknas</span>
-            </div>
-          </a>
-        {% endfor %}
+        <span>Kategorierna nedan har en färgmarkering till vänster: grön betyder inga avvikelser, gul betyder att något skiljer eller saknas.</span>
       </section>
 
       {% for group in result_groups %}
@@ -195,8 +172,8 @@
         {% set equal_rows = result.rows | selectattr('status', 'equalto', 'equal') | list %}
         {% set different_rows = result.rows | selectattr('status', 'equalto', 'different') | list %}
         {% set missing_rows = result.rows | selectattr('status', 'equalto', 'missing') | list %}
-        <details class="type-panel" id="category-{{ group.type.key }}" data-type-panel>
-          {% set issue_count = result.summary.different + result.summary.missing %}
+        {% set issue_count = result.summary.different + result.summary.missing %}
+        <details class="type-panel {{ 'all-ok' if issue_count == 0 else 'has-issues' }}" id="category-{{ group.type.key }}" data-type-panel>
           <summary class="type-summary">
             <span class="type-title">{{ group.type.label }}</span>
             <span class="type-health {{ 'ok' if issue_count == 0 else 'warn' }}">

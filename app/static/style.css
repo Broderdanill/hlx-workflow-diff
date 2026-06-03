@@ -351,3 +351,12 @@ body.blade-open{overflow:hidden}
 .status-summary .hint { margin: 0; }
 .inside-details { align-items: center; }
 
+
+/* v28.17: no separate overview cards; health is shown directly on each category row. */
+.type-panel{position:relative;border-left:6px solid #94a3b8;}
+.type-panel.all-ok{border-left-color:#22a06b;}
+.type-panel.has-issues{border-left-color:#d97008;}
+.type-panel.has-issues .type-summary{background:linear-gradient(90deg,#fffaf0 0%,#ffffff 34%);}
+.type-panel.all-ok .type-summary{background:linear-gradient(90deg,#f0fdf4 0%,#ffffff 34%);}
+.results-toolbar.slim span{color:#5b667a;}
+@media(max-width:900px){.type-panel{border-left-width:5px}}
