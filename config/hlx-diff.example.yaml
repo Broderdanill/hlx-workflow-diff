@@ -9,12 +9,23 @@ environments:
     username: Demo
     password: P@ssw0rd
     verify_tls: false
-  - name: prod
-    base_url: http://ars-arserver:8008
-    username: Demo
-    password: P@ssw0rd
-    verify_tls: false
 
 # Object types, fält och relaterade metadata-former ligger som default i appen.
 # Vill du override:a dem kan du lägga till object_types här, men låt annars bli så att
 # den djupa jämförelsen använder standardstödet för actions, mappings, guide references, fält och menyer.
+
+# Begränsa vilka formulär som ska cacheas och vilka workflow-objekt som räknas som relevanta.
+# Workflow filtreras via mapping till inkluderade formulär, t.ex. actlink_mapping/filter_mapping/escal_mapping.
+# Mönster utan wildcard tolkas som prefix. Exempel: HLX betyder samma som HLX*.
+# När cache_scope är aktivt används strikt formulärscope som standard:
+# Forms + Active Links + Filters + Escalations + relevanta Guides cacheas.
+# Globala objekt som Menus, Applications, Packing Lists och Web Services hoppas över
+# om du inte explicit sätter HELIX_SCOPE_INCLUDE_GLOBAL_TYPES=true.
+cache_scope:
+  include_form_prefixes: [HLX*,AR*]
+  exclude_form_prefixes: []
+  # Exempel:
+  # include_form_prefixes:
+  #   - HLX*
+  # exclude_form_prefixes:
+  #   - HLX:Temp*

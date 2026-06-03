@@ -3,14 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BMC HLX Workflow Diff</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <title>Helix Workflow Diff</title>
+  <link rel="stylesheet" href="/static/style.css?v=24">
 </head>
 <body>
   <main>
-    <header>
-      <h1>BMC HLX Workflow Diff</h1>
-      <p>Jämför workflow-metadata mellan två Helix/AR System-miljöer. Anslutningar och credentials ligger endast i serverns konfiguration.</p>
+    <header class="app-header">
+      <div>
+        <h1>Helix Workflow Diff</h1>
+        <p>Jämför workflow-metadata mellan miljöer</p>
+      </div>
+      <button class="info-button" type="button" aria-label="Visa information om verktyget" data-info-open>ⓘ</button>
     </header>
 
     {% if error %}<section class="error">{{ error }}</section>{% endif %}
@@ -38,9 +41,8 @@
           </label>
         </div>
 
-        <p class="hint server-config">Miljöerna hämtas från <code>HELIX_CONFIG</code> eller <code>HELIX_ENVIRONMENTS_JSON</code>. URL, användarnamn och lösenord skickas inte till browsern.</p>
 
-        <div class="grid filters">
+        <div class="grid filters filters-with-ignore">
           <label>Objekt
             <select name="object_type">
               <option value="all" {% if not form or form.object_type == 'all' %}selected{% endif %}>Alla</option>
@@ -55,20 +57,32 @@
           <label>Söktext
             <input name="contains" placeholder="namn eller associerad form" value="{{ form.contains if form else '' }}">
           </label>
-          <label>Ignorera fält
-            <input name="ignore" value="{{ form.ignore if form else 'timestamp' }}">
-          </label>
-        </div>
-
-        <div class="deep-row options-row">
-          <span class="mode-pill">Komplett jämförelse</span>
-          <span class="hint">Verktyget använder alltid komplett/djup cache. Profil: <b>{{ deep_profile }}</b>, parallella metadatahämtningar: <b>{{ related_fetch_concurrency }}</b>.</span>
+          <div class="dropdown-field metadata-field-inline">
+            <span class="field-label">Ignorera metadata</span>
+            <details class="metadata-dropdown" data-metadata-dropdown>
+              <summary>
+                <span data-ignore-summary>Välj metadata att ignorera</span>
+              </summary>
+              <div class="metadata-menu">
+                <p class="hint compact">Välj bara bort metadata som inte ska påverka jämförelsen.</p>
+                <div class="metadata-options">
+                  {% for key, item in ignore_groups.items() %}
+                    <label class="checkbox-row">
+                      <input type="checkbox" name="ignore_options" value="{{ key }}" {% if form and key in form.ignore_options %}checked{% endif %}>
+                      <span>{{ item.label }}</span>
+                    </label>
+                  {% endfor %}
+                </div>
+                <label class="custom-ignore">Egna fältnamn
+                  <input name="ignore_custom" placeholder="kommaseparerat, t.ex. timestamp,owner" value="{{ form.ignore if form else '' }}">
+                </label>
+              </div>
+            </details>
+          </div>
         </div>
 
         <div class="actions split-actions">
           <button type="submit" {% if envs|length < 2 %}disabled{% endif %}>Jämför valda miljöer</button>
-          <button class="secondary" type="submit" formaction="/sync" formmethod="post" name="sync_mode" value="full" data-sync-mode="full" {% if envs|length < 2 %}disabled{% endif %}>Full synk</button>
-          <button class="secondary" type="submit" formaction="/sync" formmethod="post" name="sync_mode" value="incremental" data-sync-mode="incremental" {% if envs|length < 2 %}disabled{% endif %}>Kontrollera ändringar</button>
         </div>
       </form>
     </section>
@@ -80,7 +94,7 @@
       <details>
         <summary class="status-summary">
           <div>
-            <strong>Miljöstatus och cache</strong>
+            <strong>Miljöstatus</strong>
             <span class="hint">
               {% if running_count %}
                 {{ running_count }} miljö{{ 'er' if running_count != 1 else '' }} synkar just nu
@@ -99,7 +113,7 @@
         </summary>
 
         <div class="status-header inside-details">
-          <p class="hint">Visar senaste sync, pågående sync och senaste ändringskontroll. Cachen ligger på PVC och är alltid komplett/djup.</p>
+          <p class="hint">Här ser du senaste sync och kan kontrollera ändringar för en miljö i taget.</p>
           <button class="secondary small" type="button" onclick="location.reload()">Uppdatera status</button>
         </div>
 
@@ -119,12 +133,17 @@
                 <span>Senast kontrollerad: <b>{{ env_status.last_checked_at or 'aldrig' }}</b></span>
                 <span>Objekt i cache: <b>{{ env_status.object_count }}</b></span>
                 {% if env_status.current_object %}<span>Nu: <b>{{ env_status.current_object }}</b></span>{% endif %}
+                {% if env_status.phase_label %}<span>Fas: <b>{{ env_status.phase_label }}</b></span>{% endif %}
+                {% if env_status.phase_total %}<span>Fasprogress: <b>{{ env_status.phase_current }} / {{ env_status.phase_total }}</b></span>{% endif %}
                 {% if env_status.last_error %}<span class="sync-errors">{{ env_status.last_error }}</span>{% endif %}
               </div>
               {% if syncing or env_status.status == 'queued' %}
                 <div class="progress"><div style="width: {{ pct|round(0) }}%"></div></div>
                 <small>{{ env_status.progress_done }} / {{ env_status.progress_total }}</small>
               {% endif %}
+              <div class="env-actions">
+                <button class="secondary small" type="button" data-env-sync="{{ env_status.env }}" {% if sync_running or env_status.status in ['syncing', 'queued'] %}disabled{% endif %}>Kontrollera ändringar</button>
+              </div>
             </article>
           {% endfor %}
         </div>
@@ -145,7 +164,7 @@
     {% if result_groups %}
       <section class="results-toolbar card slim">
         <strong>Resultat: {{ form.source_env }} → {{ form.target_env }}</strong>
-        <span>Börja med summeringen nedan. Expandera bara kategorier med avvikelser när du vill se exakt vilka fält som skiljer. <b>Komplett/djup jämförelse används alltid.</b></span>
+        <span>Börja med summeringen nedan. Expandera bara kategorier med avvikelser när du vill se exakt vilka fält som skiljer.</span>
       </section>
 
       <section class="category-overview" aria-label="Summerat jämförelseresultat">
@@ -263,12 +282,34 @@
       {% endfor %}
     {% endif %}
   </main>
-  <script>
-    const hasSyncing = document.querySelector('.env-status.syncing');
-    if (hasSyncing) {
-      window.setTimeout(() => location.reload(), 5000);
-    }
 
+  <div class="blade-backdrop" data-info-blade-backdrop aria-hidden="true" hidden></div>
+  <aside class="info-blade" data-info-blade aria-hidden="true" hidden role="dialog" aria-modal="true" aria-labelledby="info-blade-title">
+    <div class="info-blade-header">
+      <div>
+        <p class="eyebrow">Information</p>
+        <h2 id="info-blade-title">Hur fungerar verktyget?</h2>
+      </div>
+      <button class="blade-close" type="button" aria-label="Stäng information" data-info-close>×</button>
+    </div>
+    <div class="info-blade-body">
+      <p>Verktyget jämför workflow-metadata mellan Helix/AR System-miljöer med en lokal, komplett cache.</p>
+      <div class="info-list">
+        <div><strong>Serverkonfiguration</strong><span>Anslutningar och credentials ligger endast i serverns konfiguration. URL, användarnamn och lösenord skickas inte till browsern.</span></div>
+        <div><strong>Cache</strong><span>Vid pod-start kontrolleras cache automatiskt. Saknas cache byggs den upp, annars körs ändringskontroll. Cache lagras på PVC.</span></div>
+        <div><strong>Ombyggnad</strong><span>Rensa PVC och starta om podden om du vill bygga om allt från början.</span></div>
+        <div><strong>Jämförelse</strong><span>Verktyget använder komplett/djup cache. Profil: <b>{{ deep_profile }}</b>. Parallella metadatahämtningar: <b>{{ related_fetch_concurrency }}</b>.</span></div>
+        <div><strong>Synkmodell</strong><span>Migrator-lik modell: oförändrade objekt återanvänds och ändrade objekt djupanalyseras.</span></div>
+        <div><strong>Cache-scope</strong><span>Formulär som läses in styrs av <code>cache_scope</code> i <code>hlx-diff.yaml</code>. Workflow filtreras via mapping till de formulär som ingår innan djupmetadata hämtas.</span></div>
+        <div><strong>Aktiv include</strong><span>{% if cache_scope.include_form_prefixes %}{{ cache_scope.include_form_prefixes | join(', ') }}{% else %}Alla formulär{% endif %}</span></div>
+        <div><strong>Aktiv exclude</strong><span>{% if cache_scope.exclude_form_prefixes %}{{ cache_scope.exclude_form_prefixes | join(', ') }}{% else %}Inga undantag{% endif %}</span></div>
+        <div><strong>Scope-läge</strong><span>{% if cache_scope.include_form_prefixes or cache_scope.exclude_form_prefixes %}Strikt formulärscope. Läser Forms, Active Links, Filters, Escalations och försöker härleda relevanta Guides via workflow-referenser. Globala objekt som Menus, Applications, Packing Lists och Web Services cacheas alltid eftersom de inte är direkt formulärkopplade.{% else %}Ingen prefixbegränsning aktiv. Alla konfigurerade objekttyper kan cacheas.{% endif %}</span></div>
+        <div><strong>Manuell kontroll</strong><span>Knappen <b>Kontrollera ändringar</b> per miljö kör en inkrementell kontroll mot cachen.</span></div>
+      </div>
+    </div>
+  </aside>
+
+  <script>
     document.querySelectorAll('[data-type-panel]').forEach((panel) => {
       const buttons = panel.querySelectorAll('[data-status-filter]');
       const buckets = panel.querySelectorAll('[data-status-bucket]');
@@ -288,61 +329,207 @@
 
   <script>
     const syncRunningOnRender = {{ 'true' if sync_running else 'false' }};
+    let syncPollTimer = null;
 
-    function currentFormPayload(mode) {
-      const form = document.querySelector('form[action="/compare"]');
-      const data = new FormData(form);
-      return {
-        source_env: data.get('source_env'),
-        target_env: data.get('target_env'),
-        object_type: data.get('object_type') || 'all',
-        deep: true,
-        mode
-      };
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
     }
 
-    async function startSync(mode) {
-      const buttons = document.querySelectorAll('[data-sync-mode]');
-      buttons.forEach(b => b.disabled = true);
-      try {
-        const res = await fetch('/api/sync/start', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify(currentFormPayload(mode))
-        });
-        const payload = await res.json();
-        console.log('sync start', payload);
-        setTimeout(() => location.reload(), 800);
-      } catch (err) {
-        console.error(err);
-        buttons.forEach(b => b.disabled = false);
-        alert('Kunde inte starta synk. Se browser console eller pod-logg.');
-      }
+    function statusLabel(status, lastSyncAt) {
+      if (status === 'syncing') return 'Synkar';
+      if (status === 'queued') return 'Köad';
+      if (status === 'error') return 'Fel';
+      if (lastSyncAt) return 'Synkad';
+      return 'Ej synkad';
     }
 
-    document.querySelectorAll('[data-sync-mode]').forEach(button => {
-      button.addEventListener('click', (event) => {
-        event.preventDefault();
-        startSync(button.dataset.syncMode);
-      });
-    });
+    function renderSyncStatus(payload) {
+      const card = document.querySelector('#sync-status-card');
+      if (!card || !payload || !payload.cache) return false;
+      const envs = payload.cache.environments || [];
+      const detailsWasOpen = card.querySelector('details')?.open ?? false;
+      const runningCount = envs.filter(e => e.status === 'syncing').length;
+      const queuedCount = envs.filter(e => e.status === 'queued').length;
+      const errorCount = envs.filter(e => e.status === 'error').length;
+      let hint = 'Ingen synk kör just nu';
+      if (runningCount) hint = `${runningCount} miljö${runningCount !== 1 ? 'er' : ''} synkar just nu`;
+      else if (queuedCount) hint = `${queuedCount} miljö${queuedCount !== 1 ? 'er' : ''} köad${queuedCount !== 1 ? 'e' : ''}`;
+      else if (errorCount) hint = `${errorCount} miljö${errorCount !== 1 ? 'er' : ''} har fel`;
+      const summaryClass = runningCount ? 'syncing' : (errorCount ? 'error' : 'synced');
+      const summaryText = runningCount ? 'Synkar' : (errorCount ? 'Fel' : 'Klar');
+      const anySyncing = payload.sync_running || envs.some(e => ['syncing', 'queued'].includes(e.status));
 
-    async function pollSyncStatus() {
+      const cards = envs.map((env) => {
+        const progressTotal = Number(env.progress_total || 0);
+        const progressDone = Number(env.progress_done || 0);
+        const pct = progressTotal ? Math.max(0, Math.min(100, Math.round(progressDone * 100 / progressTotal))) : 0;
+        const syncing = env.status === 'syncing';
+        const queued = env.status === 'queued';
+        const disabled = anySyncing || syncing || queued ? 'disabled' : '';
+        const phaseProgress = env.phase_total ? `<span>Fasprogress: <b>${escapeHtml(env.phase_current)} / ${escapeHtml(env.phase_total)}</b></span>` : '';
+        const current = env.current_object ? `<span>Nu: <b>${escapeHtml(env.current_object)}</b></span>` : '';
+        const phase = env.phase_label ? `<span>Fas: <b>${escapeHtml(env.phase_label)}</b></span>` : '';
+        const error = env.last_error ? `<span class="sync-errors">${escapeHtml(env.last_error)}</span>` : '';
+        const progress = (syncing || queued) ? `<div class="progress"><div style="width: ${pct}%"></div></div><small>${escapeHtml(progressDone)} / ${escapeHtml(progressTotal)}</small>` : '';
+        return `
+          <article class="env-status ${escapeHtml(env.status || '')}" data-env-status data-env="${escapeHtml(env.env)}">
+            <div class="env-status-top">
+              <strong>${escapeHtml(env.env)}</strong>
+              <span class="status-pill ${escapeHtml(env.status || '')}">${escapeHtml(statusLabel(env.status, env.last_sync_at))}</span>
+            </div>
+            <div class="env-meta">
+              <span>Senast synkad: <b>${escapeHtml(env.last_sync_at || 'aldrig')}</b></span>
+              <span>Senast kontrollerad: <b>${escapeHtml(env.last_checked_at || 'aldrig')}</b></span>
+              <span>Objekt i cache: <b>${escapeHtml(env.object_count || 0)}</b></span>
+              ${current}${phase}${phaseProgress}${error}
+            </div>
+            ${progress}
+            <div class="env-actions">
+              <button class="secondary small" type="button" data-env-sync="${escapeHtml(env.env)}" ${disabled}>Kontrollera ändringar</button>
+            </div>
+          </article>`;
+      }).join('');
+
+      card.innerHTML = `
+        <details ${detailsWasOpen ? 'open' : ''}>
+          <summary class="status-summary">
+            <div>
+              <strong>Miljöstatus</strong>
+              <span class="hint">${escapeHtml(hint)}</span>
+            </div>
+            <span class="status-summary-pill ${summaryClass}">${summaryText}</span>
+          </summary>
+          <div class="status-header inside-details">
+            <p class="hint">Här ser du senaste sync och kan kontrollera ändringar för en miljö i taget.</p>
+            <button class="secondary small" type="button" data-refresh-status>Uppdatera status</button>
+          </div>
+          <div class="env-status-grid">${cards}</div>
+        </details>`;
+      bindSyncControls();
+      return anySyncing;
+    }
+
+    async function updateSyncStatus() {
       try {
         const res = await fetch('/api/cache/status', {cache: 'no-store'});
         const payload = await res.json();
-        const anySyncing = payload.sync_running || (payload.cache.environments || []).some(e => ['syncing','queued'].includes(e.status));
-        if (anySyncing) {
-          setTimeout(() => location.reload(), 2500);
-        }
+        const anySyncing = renderSyncStatus(payload);
+        if (anySyncing) scheduleSyncPoll();
       } catch (err) {
         console.debug('status poll failed', err);
       }
     }
 
+    function scheduleSyncPoll() {
+      if (syncPollTimer) window.clearTimeout(syncPollTimer);
+      syncPollTimer = window.setTimeout(updateSyncStatus, 2500);
+    }
+
+    async function startEnvSync(envName) {
+      document.querySelectorAll('[data-env-sync]').forEach(b => b.disabled = true);
+      try {
+        const res = await fetch('/api/sync/start', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({environments: [envName], object_type: 'all', deep: true, mode: 'incremental'})
+        });
+        const payload = await res.json();
+        console.log('env sync start', payload);
+        await updateSyncStatus();
+        scheduleSyncPoll();
+      } catch (err) {
+        console.error(err);
+        document.querySelectorAll('[data-env-sync]').forEach(b => b.disabled = false);
+        alert('Kunde inte starta synk. Se browser console eller pod-logg.');
+      }
+    }
+
+    function bindSyncControls() {
+      document.querySelectorAll('[data-env-sync]').forEach(button => {
+        button.addEventListener('click', (event) => {
+          event.preventDefault();
+          startEnvSync(button.dataset.envSync);
+        });
+      });
+      document.querySelectorAll('[data-refresh-status]').forEach(button => {
+        button.addEventListener('click', (event) => {
+          event.preventDefault();
+          updateSyncStatus();
+        });
+      });
+    }
+
+    bindSyncControls();
     if (syncRunningOnRender || document.querySelector('.env-status.syncing, .env-status.queued')) {
-      setTimeout(pollSyncStatus, 1500);
+      scheduleSyncPoll();
     }
   </script>
+  <script>
+    const infoOpen = document.querySelector('[data-info-open]');
+    const infoBlade = document.querySelector('[data-info-blade]');
+    const infoBackdrop = document.querySelector('[data-info-blade-backdrop]');
+    const infoClose = document.querySelector('[data-info-close]');
+
+    function openInfoBlade() {
+      if (!infoBlade || !infoBackdrop) return;
+      infoBlade.hidden = false;
+      infoBackdrop.hidden = false;
+      requestAnimationFrame(() => {
+        infoBlade.classList.add('open');
+        infoBackdrop.classList.add('open');
+      });
+      infoBlade.setAttribute('aria-hidden', 'false');
+      infoBackdrop.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('blade-open');
+      infoClose?.focus();
+    }
+
+    function closeInfoBlade() {
+      if (!infoBlade || !infoBackdrop) return;
+      infoBlade.classList.remove('open');
+      infoBackdrop.classList.remove('open');
+      infoBlade.setAttribute('aria-hidden', 'true');
+      infoBackdrop.setAttribute('aria-hidden', 'true');
+      document.body.classList.remove('blade-open');
+      window.setTimeout(() => {
+        infoBlade.hidden = true;
+        infoBackdrop.hidden = true;
+      }, 240);
+      infoOpen?.focus();
+    }
+
+    infoOpen?.addEventListener('click', openInfoBlade);
+    infoClose?.addEventListener('click', closeInfoBlade);
+    infoBackdrop?.addEventListener('click', closeInfoBlade);
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && infoBlade?.classList.contains('open')) closeInfoBlade();
+    });
+
+    function updateIgnoreSummary() {
+      document.querySelectorAll('[data-metadata-dropdown]').forEach((dropdown) => {
+        const checked = dropdown.querySelectorAll('input[type="checkbox"]:checked');
+        const summary = dropdown.querySelector('[data-ignore-summary]');
+        if (!summary) return;
+        if (!checked.length) {
+          summary.textContent = 'Inget metadata ignoreras';
+        } else if (checked.length === 1) {
+          summary.textContent = checked[0].closest('label')?.innerText.trim() || '1 val';
+        } else {
+          summary.textContent = `${checked.length} valda metadatafält`;
+        }
+      });
+    }
+
+    document.querySelectorAll('[data-metadata-dropdown] input[type="checkbox"]').forEach((box) => {
+      box.addEventListener('change', updateIgnoreSummary);
+    });
+    updateIgnoreSummary();
+  </script>
+
 </body>
 </html>

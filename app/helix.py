@@ -169,11 +169,16 @@ class HelixClient:
         batch_size = int(os.getenv("HELIX_RELATED_PARENT_BATCH_SIZE", "25") or "25")
         batch_concurrency = max(1, int(os.getenv("HELIX_RELATED_BATCH_CONCURRENCY", "4") or "4"))
 
-        if not parent_ids:
-            # Some metadata objects do not have stable parent ids. Keep a fallback,
-            # but log loudly because this is the slow path.
-            log.warning("fetch related without parent scope env=%s form=%s parent_field=%s scope=all slow_path=true", self.env.name, rel.form, rel.parent_field)
-            return await self.fetch_form_entries(rel.form, fields, q=None, limit=limit)
+        if parent_ids is None:
+            # Legacy fallback only. Normal sync always supplies an explicit parent
+            # list. Never use this path for scoped sync, because unqualified reads
+            # of forms such as filter_push/actlink_group_ids can pull tens of
+            # thousands of rows and defeat cache_scope.
+            if os.getenv("HELIX_ALLOW_UNSCOPED_RELATED_FETCH", "false").lower() in {"1", "true", "yes", "on"}:
+                log.warning("fetch related without parent scope env=%s form=%s parent_field=%s scope=all slow_path=true", self.env.name, rel.form, rel.parent_field)
+                return await self.fetch_form_entries(rel.form, fields, q=None, limit=limit)
+            log.info("fetch related skipped env=%s form=%s reason=parent_scope_missing unscoped_fetch_disabled=true", self.env.name, rel.form)
+            return []
 
         unique_ids = sorted({str(x) for x in parent_ids if x not in (None, "")})
         if not unique_ids:
@@ -189,7 +194,7 @@ class HelixClient:
 
         async def fetch_batch(batch_no: int, batch: list[str]) -> list[dict[str, Any]]:
             async with sem:
-                q = "(" + " OR ".join(f"'{rel.parent_field}' = {_quote_value(v)}" for v in batch) + ")"
+                q = "(" + " OR ".join(f"'{rel.parent_field}' = {_quote_parent_value(rel.parent_field, v)}" for v in batch) + ")"
                 rows = await self.fetch_form_entries(rel.form, fields, q=q, limit=limit)
                 log.info("fetch related batch done env=%s form=%s batch=%s/%s parents=%s rows=%s", self.env.name, rel.form, batch_no, len(batches), len(batch), len(rows))
                 return rows
@@ -216,6 +221,36 @@ def _quote_value(value):
     return f'"{str(value).replace(chr(34), chr(92)+chr(34))}"'
 
 
+def _quote_string_value(value):
+    return f'"{str(value).replace(chr(34), chr(92)+chr(34))}"'
+
+
+def _quote_type_value(obj_type: ObjectType, value):
+    # Some metadata view forms expose numeric-looking discriminator fields as
+    # character/citext fields. arcontainer.containerType is one of those in
+    # several Helix versions. If we send containerType = 1 PostgreSQL may fail
+    # with citext = integer. Quote it as a string instead.
+    if obj_type.form == "AR System Metadata: arcontainer":
+        return _quote_string_value(value)
+    return _quote_value(value)
+
+
+def _quote_parent_value(parent_field: str, value):
+    """Quote related metadata parent ids safely.
+
+    Many AR System metadata id fields such as filterId/actlinkId/containerId
+    are character fields even when they look numeric. Unquoted numeric-looking
+    values may make AR treat the value as an integer expression. That can make
+    parent-scoped related queries unreliable and, in practice, lead to broad
+    result sets. Only a small set of known integer parent fields are left
+    unquoted.
+    """
+    numeric_parent_fields = {"schemaId", "fieldId", "groupId", "vuiId"}
+    if parent_field in numeric_parent_fields and (isinstance(value, int) or (isinstance(value, str) and value.isdigit())):
+        return str(value)
+    return f'"{str(value).replace(chr(34), chr(92)+chr(34))}"'
+
+
 def _matches_type_filter(values: dict[str, Any], obj_type: ObjectType) -> bool:
     if not obj_type.type_field or not obj_type.type_values:
         return True
@@ -236,9 +271,9 @@ def build_qualification(obj_type: ObjectType, prefix: str | None = None, contain
         if len(vals) == 1 and isinstance(vals[0], str) and vals[0].startswith("not:"):
             pass
         elif len(vals) == 1:
-            clauses.append(f"'{obj_type.type_field}' = {_quote_value(vals[0])}")
+            clauses.append(f"'{obj_type.type_field}' = {_quote_type_value(obj_type, vals[0])}")
         else:
-            clauses.append("(" + " OR ".join(f"'{obj_type.type_field}' = {_quote_value(v)}" for v in vals) + ")")
+            clauses.append("(" + " OR ".join(f"'{obj_type.type_field}' = {_quote_type_value(obj_type, v)}" for v in vals) + ")")
     if prefix:
         safe = prefix.replace('"', '\\"')
         clauses.append(f"'{name}' LIKE \"{safe}%\"")

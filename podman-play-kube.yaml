@@ -1,4 +1,42 @@
 apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hlx-workflow-diff-config
+data:
+  config.yaml: |
+    environments:
+      - name: um
+        base_url: http://ars-arserver:8008
+        username: Demo
+        password: P@ssw0rd
+        verify_tls: false
+      - name: utb
+        base_url: http://ars-arserver:8008
+        username: Demo
+        password: P@ssw0rd
+        verify_tls: false
+
+    # Object types, fält och relaterade metadata-former ligger som default i appen.
+    # Vill du override:a dem kan du lägga till object_types här, men låt annars bli så att
+    # den djupa jämförelsen använder standardstödet för actions, mappings, guide references, fält och menyer.
+
+    # Begränsa vilka formulär som ska cacheas och vilka workflow-objekt som räknas som relevanta.
+    # Workflow filtreras via mapping till inkluderade formulär, t.ex. actlink_mapping/filter_mapping/escal_mapping.
+    # Mönster utan wildcard tolkas som prefix. Exempel: HLX betyder samma som HLX*.
+    # När cache_scope är aktivt används strikt formulärscope som standard:
+    # Forms + Active Links + Filters + Escalations + relevanta Guides cacheas.
+    # Globala objekt som Menus, Applications, Packing Lists och Web Services hoppas över
+    # om du inte explicit sätter HELIX_SCOPE_INCLUDE_GLOBAL_TYPES=true.
+    cache_scope:
+      include_form_prefixes: [HLX*,AR*]
+      exclude_form_prefixes: []
+      # Exempel:
+      # include_form_prefixes:
+      #   - HLX*
+      # exclude_form_prefixes:
+      #   - HLX:Temp*
+---
+apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: hlx-workflow-diff-cache-pvc
@@ -18,6 +56,9 @@ spec:
     - name: cache-volume
       persistentVolumeClaim:
         claimName: hlx-workflow-diff-cache-pvc
+    - name: config-volume
+      configMap:
+        name: hlx-workflow-diff-config
   containers:
     - name: app
       image: localhost/hlx-workflow-diff:latest
@@ -25,36 +66,22 @@ spec:
         - containerPort: 8089
           hostPort: 8089
       env:
-        - name: HELIX_CONFIG
-          value: /opt/hlx-workflow-diff/config/hlx-diff.yaml
+        - name: HELIX_CONFIG_PATH
+          value: /etc/hlx-workflow-diff/config.yaml
         - name: HELIX_CACHE_DIR
           value: /data/cache
-        # Synkar alla definierade miljöer när podden startar.
         - name: HELIX_SYNC_ON_START
           value: "true"
-        # Endast komplett/djup cache används. Vid pod-start görs full sync om cache saknas, annars incremental check.
-        # Efter första fulla synken görs en lätt timestamp-kontroll på intervall.
-        # Om metadata ändrats görs ny full sync för den objekttypen.
-        - name: HELIX_SYNC_INTERVAL_SECONDS
-          value: "900"
-        # balanced = Migrator-lik djupanalys utan äldre/ovanliga action-former.
-        # full = alla kända relaterade metadata-former. minimal = snabbare behörighet/fält/mapping.
         - name: HELIX_DEEP_PROFILE
           value: balanced
-        # Migrator-lik cache: första körningen bygger komplett djup snapshot.
-        # Inkrementell sync hämtar basmetadata för alla objekt men expanderar bara
-        # djup metadata för nya/ändrade objekt.
         - name: HELIX_ENV_CONCURRENCY
-          value: "2"
+          value: "1"
         - name: HELIX_OBJECT_CONCURRENCY
-          value: "2"
-        # Antal parallella relaterade metadata-former som hämtas per objekttyp/miljö.
+          value: "1"
         - name: HELIX_RELATED_FETCH_CONCURRENCY
           value: "3"
-        # Antal parallella q-batcher per relaterad metadata-form.
         - name: HELIX_RELATED_BATCH_CONCURRENCY
           value: "3"
-        # Antal parent-objekt per q-batch när djupmetadata hämtas.
         - name: HELIX_RELATED_PARENT_BATCH_SIZE
           value: "25"
         - name: HELIX_HTTP_TIMEOUT
@@ -64,3 +91,6 @@ spec:
       volumeMounts:
         - name: cache-volume
           mountPath: /data/cache
+        - name: config-volume
+          mountPath: /etc/hlx-workflow-diff
+          readOnly: true

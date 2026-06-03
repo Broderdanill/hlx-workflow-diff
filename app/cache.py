@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -36,6 +35,14 @@ def state_path() -> Path:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def active_scope_signature() -> str:
+    return os.getenv("HELIX_CACHE_SCOPE_SIGNATURE", "") or ""
+
+
+def active_scope_json() -> str:
+    return os.getenv("HELIX_CACHE_SCOPE_JSON", "{}") or "{}"
 
 
 def read_state() -> dict[str, Any]:
@@ -86,6 +93,8 @@ def save_cache(env_name: str, obj_type: ObjectType, deep: bool, objects: dict[st
         "count": len(objects),
         "max_timestamp": max_timestamp(objects),
         "objects": objects,
+        "scope_signature": active_scope_signature(),
+        "scope": json.loads(active_scope_json()),
     }
     path = cache_path(env_name, obj_type.key, deep)
     tmp = path.with_suffix(".tmp")
@@ -109,6 +118,11 @@ def load_cache(env_name: str, obj_type: ObjectType, deep: bool) -> dict[str, Any
         log.debug("cache miss env=%s type=%s deep=%s path=%s", env_name, obj_type.key, deep, path)
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
+    current_sig = active_scope_signature()
+    cached_sig = payload.get("scope_signature", "") or ""
+    if current_sig and cached_sig != current_sig:
+        log.info("cache ignored because scope changed env=%s type=%s deep=%s cached_scope=%s current_scope=%s path=%s", env_name, obj_type.key, deep, cached_sig, current_sig, path)
+        return None
     log.debug("cache hit env=%s type=%s deep=%s count=%s path=%s", env_name, obj_type.key, deep, payload.get("count"), path)
     return payload
 
@@ -165,6 +179,10 @@ def environment_summary(env: Environment, types: dict[str, ObjectType]) -> dict[
         "status": runtime.get("status", "not_synced" if cached_types == 0 else "synced"),
         "message": runtime.get("message"),
         "current_object": runtime.get("current_object"),
+        "phase": runtime.get("phase"),
+        "phase_label": runtime.get("phase_label"),
+        "phase_current": runtime.get("phase_current", 0),
+        "phase_total": runtime.get("phase_total", 0),
         "progress_done": runtime.get("progress_done", 0),
         "progress_total": runtime.get("progress_total", 0),
         "last_error": runtime.get("last_error"),
@@ -199,6 +217,8 @@ def cache_status(envs: list[Environment], types: dict[str, ObjectType]) -> dict[
         "objects": rows,
         "state": read_state(),
         "cache_mode": "deep-only",
+        "scope": json.loads(active_scope_json()),
+        "scope_signature": active_scope_signature(),
     }
 
 def mark_cache_checked(env_name: str, obj_type: ObjectType, deep: bool, changed: bool, checked_at: str | None = None) -> None:
@@ -216,10 +236,12 @@ def mark_cache_checked(env_name: str, obj_type: ObjectType, deep: bool, changed:
 def _matches_cached(obj: dict[str, Any], obj_type: ObjectType, prefix: str | None, contains: str | None) -> bool:
     name = obj.get("name", "")
     values = obj.get("values", {}) or {}
-    if prefix and not str(name).startswith(prefix):
-        return False
+    if prefix:
+        # GUI prefix filtering should be user-friendly and case-insensitive.
+        if not str(name).lower().startswith(str(prefix).strip().lower()):
+            return False
     if contains:
-        needle = contains.lower()
+        needle = str(contains).strip().lower()
         fields = obj_type.search_fields or [obj_type.name_field]
         haystack = [str(name)]
         for field in fields:
@@ -248,16 +270,3 @@ def objects_from_cache(env: Environment, obj_type: ObjectType, deep: bool, prefi
             "fingerprint": fingerprint(values, ignore_fields | {obj_type.name_field, "Request ID", "Record ID"}),
         }
     return result
-
-
-async def periodic_sync(sync_callable, interval_seconds: int) -> None:
-    # Enkel in-process scheduler för podman play kube. Ingen databas och ingen extern worker.
-    log.info("periodic sync scheduler started interval_seconds=%s", interval_seconds)
-    while True:
-        await asyncio.sleep(interval_seconds)
-        try:
-            log.info("periodic sync tick")
-            await sync_callable()
-        except Exception:
-            # Fel syns i status. Bakgrundssync får inte krascha webbprocessen.
-            log.exception("periodic sync failed")

@@ -1,0 +1,10 @@
+AR System Metadata: arschema
+    Name (namn på formuläret)
+    Schema ID (id för relationerna)
+
+AR System Metadata: field
+    Field Name (namn på fältet)
+    Form ID (id för formulär, dvs Schema ID från arschema formuläret)
+    Field ID (fält id)
+
+AR System Metadata: act

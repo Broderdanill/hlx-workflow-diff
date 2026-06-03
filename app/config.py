@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import dataclass, field
@@ -16,6 +17,27 @@ class Environment:
     password: str
     verify_tls: bool = True
     auth_string: str | None = None
+
+
+@dataclass
+class CacheScope:
+    include_form_prefixes: list[str] = field(default_factory=list)
+    exclude_form_prefixes: list[str] = field(default_factory=list)
+
+    def normalized(self) -> dict[str, list[str]]:
+        return {
+            "include_form_prefixes": [str(x).strip() for x in self.include_form_prefixes if str(x).strip()],
+            "exclude_form_prefixes": [str(x).strip() for x in self.exclude_form_prefixes if str(x).strip()],
+        }
+
+    def signature(self) -> str:
+        payload = self.normalized()
+        # Bump this when scope semantics change so old PVC cache created with a
+        # broader/buggy scope is not reused silently.
+        payload["scope_model"] = "form-prefix-schemaid-int-workflowid-v9-arcontainer-local"
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        empty = {"exclude_form_prefixes": [], "include_form_prefixes": [], "scope_model": "form-prefix-schemaid-int-workflowid-v9-arcontainer-local"}
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16] if payload != empty else ""
 
 
 @dataclass
@@ -117,29 +139,33 @@ MENU_RELATED = [
 DEFAULT_OBJECT_TYPES = [
     ObjectType(
         key="form", label="Forms", form="AR System Metadata: arschema", name_field="name",
+        id_fields=["schemaId", "Request ID", "Record ID"],
         compare_fields=["numFields", "schemaType", "numVuis", "coreVersion", "defaultVui", "nextFieldId", "safeGuard", "viewName", "objProp", "smObjProp", "version", "overlayGroup", "overlayProp", "resolvedName", "schemaRowIdentifier", "bundleScope", "bundleScopeEnabled"],
         search_fields=["name", "resolvedName", "viewName"], related_forms=FORM_RELATED,
     ),
     ObjectType(
         key="actlink", label="Active Links", form="AR System Metadata: actlink", name_field="name",
+        id_fields=["Active Link ID", "Request ID", "Record ID"],
         compare_fields=["enable", "numActions", "numElses", "queryShort", "queryLong", "objProp", "smObjProp", "version", "alOrder", "controlfieldId", "errorActlinkId", "errorActlinkOptions", "executeMask", "safeGuard", "wkConnType", "overlayGroup", "overlayProp", "resolvedName", "bundleScope", "bundleScopeEnabled"],
         search_fields=["name", "queryShort", "queryLong", "resolvedName"], related_forms=ACTLINK_RELATED,
     ),
     ObjectType(
         key="filter", label="Filters", form="AR System Metadata: filter", name_field="name",
+        id_fields=["Filter ID", "Request ID", "Record ID"],
         compare_fields=["enable", "numActions", "numElses", "queryShort", "queryLong", "objProp", "smObjProp", "version", "errorFilterId", "errorFilterOptions", "fOrder", "opSet", "safeGuard", "wkConnType", "overlayGroup", "overlayProp", "resolvedName", "bundleScope", "bundleScopeEnabled"],
         search_fields=["name", "queryShort", "queryLong", "resolvedName"], related_forms=FILTER_RELATED,
     ),
     ObjectType(
         key="escalation", label="Escalations", form="AR System Metadata: escalation", name_field="name",
+        id_fields=["Escalation ID", "Request ID", "Record ID"],
         compare_fields=["enable", "numActions", "numElses", "queryShort", "queryLong", "objProp", "smObjProp", "version", "firetmType", "hourmask", "minute", "monthday", "safeGuard", "tminterval", "weekday", "wkConnType", "overlayGroup", "overlayProp", "resolvedName", "bundleScope", "bundleScopeEnabled"],
         search_fields=["name", "queryShort", "queryLong", "resolvedName"], related_forms=[RelatedForm("AR System Metadata: escal_mapping", "escalationId", ["escalationId", "schemaId", "objIndex", "escalationOverlayGroup", "overlayExtended"])],
     ),
-    ObjectType(key="active_link_guide", label="Active Link Guides", form="AR System Metadata: arcontainer", name_field="name", type_field="containerType", type_values=[1], compare_fields=COMMON_CONTAINER_FIELDS, search_fields=["name", "label", "description", "resolvedName"], related_forms=CONTAINER_RELATED),
-    ObjectType(key="filter_guide", label="Filter Guides", form="AR System Metadata: arcontainer", name_field="name", type_field="containerType", type_values=[4], compare_fields=COMMON_CONTAINER_FIELDS, search_fields=["name", "label", "description", "resolvedName"], related_forms=CONTAINER_RELATED),
-    ObjectType(key="application", label="Applications", form="AR System Metadata: arcontainer", name_field="name", type_field="containerType", type_values=[2], compare_fields=COMMON_CONTAINER_FIELDS, search_fields=["name", "label", "description", "resolvedName"], related_forms=CONTAINER_RELATED),
-    ObjectType(key="packing_list", label="Packing Lists", form="AR System Metadata: arcontainer", name_field="name", type_field="containerType", type_values=[3], compare_fields=COMMON_CONTAINER_FIELDS, search_fields=["name", "label", "description", "resolvedName"], related_forms=CONTAINER_RELATED),
-    ObjectType(key="web_service", label="Web Services", form="AR System Metadata: arcontainer", name_field="name", type_field="containerType", type_values=[5], compare_fields=COMMON_CONTAINER_FIELDS, search_fields=["name", "label", "description", "resolvedName"], related_forms=CONTAINER_RELATED),
+    ObjectType(key="active_link_guide", label="Active Link Guides", form="AR System Metadata: arcontainer", name_field="name", type_field="containerType", type_values=[1], id_fields=["Container ID", "Request ID", "Record ID"], compare_fields=COMMON_CONTAINER_FIELDS, search_fields=["name", "label", "description", "resolvedName"], related_forms=CONTAINER_RELATED),
+    ObjectType(key="filter_guide", label="Filter Guides", form="AR System Metadata: arcontainer", name_field="name", type_field="containerType", type_values=[4], id_fields=["Container ID", "Request ID", "Record ID"], compare_fields=COMMON_CONTAINER_FIELDS, search_fields=["name", "label", "description", "resolvedName"], related_forms=CONTAINER_RELATED),
+    ObjectType(key="application", label="Applications", form="AR System Metadata: arcontainer", name_field="name", type_field="containerType", type_values=[2], id_fields=["Container ID", "Request ID", "Record ID"], compare_fields=COMMON_CONTAINER_FIELDS, search_fields=["name", "label", "description", "resolvedName"], related_forms=CONTAINER_RELATED),
+    ObjectType(key="packing_list", label="Packing Lists", form="AR System Metadata: arcontainer", name_field="name", type_field="containerType", type_values=[3], id_fields=["Container ID", "Request ID", "Record ID"], compare_fields=COMMON_CONTAINER_FIELDS, search_fields=["name", "label", "description", "resolvedName"], related_forms=CONTAINER_RELATED),
+    ObjectType(key="web_service", label="Web Services", form="AR System Metadata: arcontainer", name_field="name", type_field="containerType", type_values=[5], id_fields=["Container ID", "Request ID", "Record ID"], compare_fields=COMMON_CONTAINER_FIELDS, search_fields=["name", "label", "description", "resolvedName"], related_forms=CONTAINER_RELATED),
     ObjectType(key="menu", label="Menus", form="AR System Metadata: char_menu", name_field="name", compare_fields=["menuType", "refreshCode", "safeGuard", "objProp", "smObjProp", "version", "overlayGroup", "overlayProp", "resolvedName", "bundleScope", "bundleScopeEnabled"], search_fields=["name", "resolvedName"], related_forms=MENU_RELATED),
 ]
 
@@ -200,17 +226,63 @@ def _object_type_from_yaml(item: dict) -> ObjectType:
     return ObjectType(**item)
 
 
-def _load_yaml(path: str | None) -> tuple[list[Environment], list[ObjectType]]:
+DEFAULT_CONFIG_PATHS = [
+    "/etc/hlx-workflow-diff/config.yaml",
+    "/config/hlx-diff.yaml",
+    "/opt/hlx-workflow-diff/config/hlx-diff.yaml",
+]
+
+
+def resolve_config_path() -> str | None:
+    """Resolve configuration file path.
+
+    Priority:
+    1. HELIX_CONFIG_PATH
+    2. HELIX_CONFIG
+    3. ConfigMap mount path: /etc/hlx-workflow-diff/config.yaml
+    4. Legacy paths for backwards compatibility.
+    """
+    candidates: list[str | None] = [
+        os.getenv("HELIX_CONFIG_PATH"),
+        os.getenv("HELIX_CONFIG"),
+        *DEFAULT_CONFIG_PATHS,
+    ]
+    seen: set[str] = set()
+    for item in candidates:
+        if not item:
+            continue
+        path = str(item)
+        if path in seen:
+            continue
+        seen.add(path)
+        if Path(path).exists():
+            return path
+    return None
+
+
+def _load_yaml(path: str | None) -> tuple[list[Environment], list[ObjectType], CacheScope]:
     if not path or not Path(path).exists():
-        return [], []
+        return [], [], CacheScope()
     doc = yaml.safe_load(Path(path).read_text()) or {}
     envs = [Environment(**item) for item in doc.get("environments", [])]
     types = [_object_type_from_yaml(item) for item in doc.get("object_types", [])]
-    return envs, types
+    scope_doc = doc.get("cache_scope", {}) or {}
+    scope = CacheScope(
+        include_form_prefixes=scope_doc.get("include_form_prefixes", []) or [],
+        exclude_form_prefixes=scope_doc.get("exclude_form_prefixes", []) or [],
+    )
+    return envs, types, scope
+
+
+def load_cache_scope() -> CacheScope:
+    _envs, _types, scope = _load_yaml(resolve_config_path())
+    return scope
 
 
 def load_config() -> tuple[list[Environment], dict[str, ObjectType]]:
-    yaml_envs, yaml_types = _load_yaml(os.getenv("HELIX_CONFIG", "/config/hlx-diff.yaml"))
+    yaml_envs, yaml_types, scope = _load_yaml(resolve_config_path())
+    os.environ["HELIX_CACHE_SCOPE_SIGNATURE"] = scope.signature()
+    os.environ["HELIX_CACHE_SCOPE_JSON"] = json.dumps(scope.normalized(), ensure_ascii=False, sort_keys=True)
     envs = yaml_envs or _env_list_from_json()
     types = _filter_related_by_profile(yaml_types or DEFAULT_OBJECT_TYPES)
     return envs, {t.key: t for t in types}
